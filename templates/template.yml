@@ -1,0 +1,58 @@
+title: Test Rule
+author: ducnta
+enabled: false
+status: disabled
+severity: 3
+query:
+  language: spl
+  search: |-
+    index="attack_data"  EventCode=10 TargetImage=*lsass.exe (GrantedAccess=0x1010 OR GrantedAccess=0x1410)
+    | stats count min(_time) as firstTime max(_time) as lastTime
+        BY CallTrace, EventID, GrantedAccess,
+           Guid, Opcode, ProcessID
+schedule:
+  enabled: false
+  cron: '*/5 * * * *'
+  earliest_time: -24h@h
+  latest_time: now
+  realtime: true
+alert:
+  type: number of events
+  comparator: greater than
+  threshold: 0
+  expires: 24h
+  digest_mode: true
+  track: true
+  suppression:
+    enabled: true
+    period: 60m
+actions:
+- type: webhook
+  params:
+    url: https://your.server.com/api/v1/webhook
+  enabled: true
+splunk:
+  app: search
+  owner: ducnta
+  sharing: global
+  server: t00msvr
+  dispatch:
+    ttl: 2p
+    max_count: 500000
+    max_time: 0
+    lookups: true
+    allow_partial_results: true
+metadata:
+  id: uuid
+  updated: '2026-07-08T23:41:48+07:00'
+  last_updated_by: ducnta
+  version: 1.0.0
+tags:
+- test
+mitre:
+  tactics:
+  - defense-evasion
+  techniques:
+  - T1003
+  sub-techniques:
+  - T1003.001
