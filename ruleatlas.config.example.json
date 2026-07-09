@@ -1,0 +1,6 @@
+{
+  "ruleRepo": {
+    "path": "../detection-rules",
+    "contentRoot": "contents"
+  }
+}

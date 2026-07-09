@@ -15,6 +15,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!src/lib/
 lib64/
 parts/
 sdist/
@@ -210,6 +211,10 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+
+# Node / Vite
+node_modules/
+ruleatlas.config.json
 
 # Marimo
 marimo/_static/
