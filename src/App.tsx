@@ -1,4 +1,17 @@
 import { StrictMode, useEffect, useRef, useState } from 'react';
+import {
+  AppShell as AstryxAppShell,
+  Banner,
+  HStack,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  StackItem,
+  Text,
+  Theme,
+  VStack,
+} from '@astryxdesign/core';
+import { neutralTheme } from '@astryxdesign/theme-neutral/built';
 import { AppShell } from './components/AppShell';
 import { ImportExportPage } from './components/ImportExportPage';
 import { JsonModal } from './components/JsonModal';
@@ -151,30 +164,59 @@ export function App() {
   const records = getTemplateRecords(store, activeTemplateId);
 
   return (
-    <div className="app-shell">
-      <AppShell activeTemplateId={activeTemplateId} onNavigate={navigate} />
-      <div className="content-shell">
-        <div className={`repo-sync-status repo-sync-${syncState.status}`}>
-          {syncState.message}
-        </div>
-        {activeTemplateId === 'import-export' ? (
-          <ImportExportPage
-            store={store}
-            onExport={exportAll}
-            onImport={(file) => void importStoreFile(file)}
-            onPreview={setPreview}
-          />
-        ) : (
-          <TemplateWorkspace
-            records={records}
-            store={store}
-            template={template}
-            onExportTemplate={exportTemplate}
-            onPreview={setPreview}
-            onStoreChange={setStore}
-          />
-        )}
-      </div>
+    <Theme theme={neutralTheme} mode="light">
+      <AstryxAppShell
+        contentPadding={0}
+        height="fill"
+        sideNav={<AppShell activeTemplateId={activeTemplateId} onNavigate={navigate} />}
+        variant="section"
+      >
+        <Layout
+          height="fill"
+          header={
+            <LayoutHeader hasDivider label="RuleAtlas status">
+              <HStack align="center" className="app-status-bar" gap={4} paddingInline={4} paddingBlock={3} wrap="wrap">
+                <StackItem className="app-title-copy" size="fill">
+                  <VStack gap={0.5}>
+                    <Text as="p" color="secondary" type="supporting">
+                      Local-first detection engineering workspace
+                    </Text>
+                    <Text as="p" color="primary" type="large">
+                      RuleAtlas templates
+                    </Text>
+                  </VStack>
+                </StackItem>
+                <div className="sync-banner-wrap">
+                  <Banner
+                    status={syncState.status === 'error' ? 'error' : syncState.status === 'saved' ? 'success' : 'warning'}
+                    title={syncState.message}
+                  />
+                </div>
+              </HStack>
+            </LayoutHeader>
+          }
+        >
+          <LayoutContent label="RuleAtlas workspace">
+            {activeTemplateId === 'import-export' ? (
+              <ImportExportPage
+                store={store}
+                onExport={exportAll}
+                onImport={(file) => void importStoreFile(file)}
+                onPreview={setPreview}
+              />
+            ) : (
+              <TemplateWorkspace
+                records={records}
+                store={store}
+                template={template}
+                onExportTemplate={exportTemplate}
+                onPreview={setPreview}
+                onStoreChange={setStore}
+              />
+            )}
+          </LayoutContent>
+        </Layout>
+      </AstryxAppShell>
 
       {preview ? (
         <JsonModal
@@ -184,7 +226,7 @@ export function App() {
           onCopy={copyText}
         />
       ) : null}
-    </div>
+    </Theme>
   );
 }
 

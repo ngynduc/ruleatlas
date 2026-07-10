@@ -2,6 +2,7 @@ export type FieldType =
   | 'text'
   | 'textarea'
   | 'code'
+  | 'date'
   | 'select'
   | 'boolean'
   | 'number'

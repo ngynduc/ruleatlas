@@ -43,7 +43,18 @@ const rules: TemplateDefinition = {
   pluralName: 'Rules',
   description: 'Catalog detection rules across draft, testing, and deployed states.',
   storageKey: 'rules',
-  tableFields: ['rule_id', 'name', 'status', 'owner', 'platform', 'last_reviewed', 'severity'],
+  tableFields: [
+    'rule_id',
+    'name',
+    'status',
+    'owner',
+    'platform',
+    'severity',
+    'mitre_tactic',
+    'mitre_technique',
+    'tags',
+    'last_reviewed',
+  ],
   filterFields: ['status', 'severity', 'category', 'coverage_type'],
   fields: [
     { key: 'rule_id', label: 'Rule ID', type: 'text', required: true, placeholder: 'RA-001' },
@@ -62,7 +73,7 @@ const rules: TemplateDefinition = {
     { key: 'mitre_tactic', label: 'MITRE Tactic', type: 'text' },
     { key: 'mitre_technique', label: 'MITRE Technique', type: 'text' },
     { key: 'query', label: 'Current Query', type: 'code' },
-    { key: 'last_reviewed', label: 'Last Reviewed', type: 'text', placeholder: '2026-07-09' },
+    { key: 'last_reviewed', label: 'Last Reviewed', type: 'date', placeholder: '2026-07-09' },
     { key: 'tags', label: 'Tags', type: 'tags' },
   ],
 };

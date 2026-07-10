@@ -1,3 +1,18 @@
+import {
+  Button,
+  DialogHeader,
+  Field,
+  FormLayout,
+  HStack,
+  Layout,
+  LayoutContent,
+  LayoutFooter,
+  Selector,
+  StackItem,
+  Switch,
+  TextArea,
+  TextInput,
+} from '@astryxdesign/core';
 import { coerceValue, formatValue, parseList } from '../lib/records';
 import type {
   RecordValue,
@@ -15,6 +30,9 @@ interface RecordEditorProps {
   onSubmit: () => void;
   onPreview: () => void;
   onCancel: () => void;
+  onDuplicate?: () => void;
+  onArchive?: () => void;
+  onDelete?: () => void;
 }
 
 export function RecordEditor({
@@ -25,11 +43,11 @@ export function RecordEditor({
   onSubmit,
   onPreview,
   onCancel,
+  onDuplicate,
+  onArchive,
+  onDelete,
 }: RecordEditorProps) {
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    onSubmit();
-  };
+  const hasRecordActions = Boolean(onDuplicate || onArchive || onDelete);
 
   const updateField = (field: TemplateField, value: unknown) => {
     onChange({
@@ -43,43 +61,60 @@ export function RecordEditor({
   };
 
   return (
-    <form
-      aria-label={`Edit ${template.name}`}
-      aria-modal="true"
-      className="editor-panel"
-      role="dialog"
-      onSubmit={handleSubmit}
+    <Layout
+      height="fill"
+      header={
+        <DialogHeader
+          hasDivider
+          title={`Edit ${template.name}`}
+          subtitle="Required fields validate before saving."
+          onOpenChange={(isOpen) => {
+            if (!isOpen) {
+              onCancel();
+            }
+          }}
+        />
+      }
+      footer={
+        <LayoutFooter hasDivider label="Editor actions">
+          <HStack align="center" gap={2} padding={3} wrap="wrap">
+            <StackItem size="fill">
+              {hasRecordActions ? (
+                <HStack align="center" gap={2} wrap="wrap">
+                  {onDuplicate ? <Button label="Duplicate" size="sm" variant="secondary" onClick={onDuplicate} /> : null}
+                  {onArchive ? (
+                    <Button
+                      label={record.archived ? 'Restore' : 'Archive'}
+                      size="sm"
+                      variant="secondary"
+                      onClick={onArchive}
+                    />
+                  ) : null}
+                  {onDelete ? <Button label="Delete" size="sm" variant="destructive" onClick={onDelete} /> : null}
+                </HStack>
+              ) : null}
+            </StackItem>
+            <Button label="Preview JSON" size="sm" variant="secondary" onClick={onPreview} />
+            <Button label="Cancel" size="sm" variant="secondary" onClick={onCancel} />
+            <Button label="Save" size="sm" variant="primary" onClick={onSubmit} />
+          </HStack>
+        </LayoutFooter>
+      }
     >
-      <div className="panel-heading editor-heading">
-        <div>
-          <h1>Edit {template.name}</h1>
-          <p>Required fields validate before saving.</p>
-        </div>
-        <div className="button-row">
-          <button type="button" onClick={onPreview}>
-            Preview JSON
-          </button>
-          <button type="button" onClick={onCancel}>
-            Cancel
-          </button>
-          <button className="primary-button" type="submit">
-            Save
-          </button>
-        </div>
-      </div>
-
-      <div className="form-grid">
-        {template.fields.map((field) => (
-          <FieldControl
-            error={errors[field.key]}
-            field={field}
-            key={field.key}
-            value={record.data[field.key]}
-            onChange={(value) => updateField(field, value)}
-          />
-        ))}
-      </div>
-    </form>
+      <LayoutContent label={`${template.name} fields`}>
+        <FormLayout className="record-form-grid">
+          {template.fields.map((field) => (
+            <FieldControl
+              error={errors[field.key]}
+              field={field}
+              key={field.key}
+              value={record.data[field.key]}
+              onChange={(value) => updateField(field, value)}
+            />
+          ))}
+        </FormLayout>
+      </LayoutContent>
+    </Layout>
   );
 }
 
@@ -91,84 +126,164 @@ interface FieldControlProps {
 }
 
 function FieldControl({ field, value, error, onChange }: FieldControlProps) {
-  const label = `${field.label}${field.required ? ' *' : ''}`;
   const stringValue = formatValue(value);
 
-  return (
-    <label className={`field field-${field.type}`}>
-      <span>
-        {label}
-        {error ? <em>{error}</em> : null}
-      </span>
-
-      {renderControl(field, value, stringValue, onChange)}
-    </label>
-  );
+  return renderControl(field, value, stringValue, error, onChange);
 }
 
 function renderControl(
   field: TemplateField,
   value: RecordValue,
   stringValue: string,
+  error: string | undefined,
   onChange: (value: unknown) => void,
 ) {
-  if (field.type === 'textarea' || field.type === 'code') {
+  const status = error ? { type: 'error' as const, message: error } : undefined;
+
+  if (field.type === 'code') {
     return (
-      <textarea
-        className={field.type === 'code' ? 'code-textarea' : undefined}
+      <Field
+        className="wide-field"
+        inputID={`${field.key}-code-editor`}
+        isRequired={field.required}
+        label={field.label}
+        status={status}
+        statusVariant="detached"
+      >
+        <textarea
+          id={`${field.key}-code-editor`}
+          className="native-code-editor"
+          placeholder={field.placeholder}
+          rows={10}
+          spellCheck={false}
+          value={stringValue}
+          wrap="off"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </Field>
+    );
+  }
+
+  if (field.type === 'textarea') {
+    return (
+      <TextArea
+        className={field.key === 'description' ? 'wide-field compact-textarea-field' : undefined}
+        hasSpellCheck
+        isRequired={field.required}
+        label={field.label}
         placeholder={field.placeholder}
-        spellCheck={field.type === 'code' ? false : undefined}
+        rows={field.key === 'description' ? 2 : 4}
+        status={status}
         value={stringValue}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={onChange}
       />
     );
   }
 
   if (field.type === 'select') {
     return (
-      <select value={stringValue} onChange={(event) => onChange(event.target.value)}>
-        {field.options?.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      <Selector
+        isRequired={field.required}
+        label={field.label}
+        options={(field.options ?? []).map((option) => ({ value: option, label: option }))}
+        placeholder={field.placeholder}
+        status={status}
+        value={stringValue}
+        onChange={onChange}
+      />
     );
   }
 
   if (field.type === 'boolean') {
     return (
-      <span className="checkbox-line">
-        <input
-          checked={Boolean(value)}
-          type="checkbox"
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        Enabled
-      </span>
+      <Switch
+        isRequired={field.required}
+        label={field.label}
+        status={status}
+        value={Boolean(value)}
+        onChange={onChange}
+      />
+    );
+  }
+
+  if (field.key === 'rule_id') {
+    return (
+      <TextInput
+        disabledMessage="Rule IDs are generated when the record is created."
+        isDisabled
+        isRequired={field.required}
+        label={field.label}
+        placeholder={field.placeholder}
+        status={status}
+        value={stringValue}
+      />
     );
   }
 
   if (field.type === 'number') {
     return (
-      <input
-        min="0"
-        placeholder={field.placeholder}
-        type="number"
-        value={stringValue}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <Field
+        inputID={`${field.key}-number`}
+        isRequired={field.required}
+        label={field.label}
+        status={status}
+        statusVariant="detached"
+      >
+        <input
+          id={`${field.key}-number`}
+          className="native-number-input"
+          min="0"
+          placeholder={field.placeholder}
+          type="number"
+          value={stringValue}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </Field>
+    );
+  }
+
+  if (field.type === 'date') {
+    return (
+      <Field
+        inputID={`${field.key}-date`}
+        isRequired={field.required}
+        label={field.label}
+        status={status}
+        statusVariant="detached"
+      >
+        <input
+          id={`${field.key}-date`}
+          className="native-date-input"
+          placeholder={field.placeholder}
+          type="date"
+          value={dateInputValue(stringValue)}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </Field>
     );
   }
 
   return (
-    <input
+    <TextInput
+      isRequired={field.required}
+      label={field.label}
       placeholder={field.placeholder}
-      readOnly={field.key === 'rule_id'}
+      status={status}
       value={stringValue}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={onChange}
     />
   );
+}
+
+function dateInputValue(value: string): string {
+  if (!value) {
+    return '';
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
 function normalizeInputValue(field: TemplateField, value: unknown): RecordValue {

@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Banner,
+  Button,
+  Dialog,
+  Heading,
+  HStack,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Selector,
+  StackItem,
+  Switch,
+  Text,
+  TextInput,
+  VStack,
+} from '@astryxdesign/core';
+import {
   createBlankRecord,
   createRuleId,
   filterOptions,
@@ -63,6 +79,7 @@ export function TemplateWorkspace({
     () => filterRecords(template, records, search, filters, showArchived),
     [filters, records, search, showArchived, template],
   );
+  const draftIsSaved = records.some((record) => record.id === draft.id);
 
   const replaceRecords = (nextRecords: TemplateRecord[]) => {
     onStoreChange(updateStoreRecords(store, template, nextRecords));
@@ -179,92 +196,109 @@ export function TemplateWorkspace({
   };
 
   return (
-    <main className="workspace">
-      <section className="list-panel">
-        <div className="panel-heading">
-          <div>
-            <h1>{template.pluralName}</h1>
-            <p>
-              {records.length} saved, {records.filter((record) => record.archived).length} archived
-            </p>
-          </div>
-          <button className="primary-button" type="button" onClick={startAdd}>
-            Add item
-          </button>
-        </div>
+    <>
+      <Layout
+        height="fill"
+        header={
+          <LayoutHeader hasDivider label={`${template.pluralName} header`}>
+            <HStack align="center" gap={4} paddingInline={4} paddingBlock={3} wrap="wrap">
+              <StackItem size="fill">
+                <VStack gap={1}>
+                  <Heading level={1}>{template.pluralName}</Heading>
+                  <Text as="p" color="secondary" type="supporting">
+                    {template.description}
+                  </Text>
+                  <Text as="p" color="secondary" type="supporting">
+                    {records.length} saved, {records.filter((record) => record.archived).length} archived
+                  </Text>
+                </VStack>
+              </StackItem>
+              <Button label={`Add ${template.name}`} variant="primary" onClick={startAdd} />
+            </HStack>
+          </LayoutHeader>
+        }
+      >
+        <LayoutContent label={`${template.pluralName} records`}>
+          <VStack gap={0}>
+            <section className="workspace-toolbar-shell" aria-label={`${template.pluralName} filters`}>
+              <HStack align="center" className="workspace-toolbar" gap={2} wrap="wrap">
+                <HStack align="center" className="toolbar-filter-group" gap={2} wrap="wrap">
+                  <TextInput
+                    hasClear
+                    isLabelHidden
+                    label={`Search ${template.pluralName}`}
+                    placeholder={`Search ${template.pluralName.toLowerCase()}...`}
+                    value={search}
+                    width={280}
+                    onChange={setSearch}
+                  />
+                  {template.filterFields.map((fieldKey) => (
+                    <Selector
+                      isLabelHidden
+                      key={fieldKey}
+                      label={`Filter by ${fieldKey.replaceAll('_', ' ')}`}
+                      options={[
+                        { value: 'all', label: `All ${fieldKey.replaceAll('_', ' ')}` },
+                        ...filterOptions(template, records, fieldKey).map((option) => ({
+                          value: option,
+                          label: option,
+                        })),
+                      ]}
+                      value={filters[fieldKey] ?? 'all'}
+                      onChange={(value) => setFilters({ ...filters, [fieldKey]: value })}
+                    />
+                  ))}
+                  <Switch
+                    label="Archived"
+                    value={showArchived}
+                    onChange={setShowArchived}
+                  />
+                </HStack>
+                <span className="toolbar-spacer" aria-hidden="true" />
+                <HStack align="center" className="toolbar-actions" gap={2} wrap="wrap">
+                  <Button
+                    label="Preview JSON"
+                    variant="secondary"
+                    onClick={() => onPreview({ title: `${template.name} collection`, value: records })}
+                  />
+                  <Button label="Export JSON" variant="secondary" onClick={() => onExportTemplate(template)} />
+                  <Button label="Import JSON" variant="secondary" onClick={() => fileInputRef.current?.click()} />
+                  <input
+                    ref={fileInputRef}
+                    className="hidden-input"
+                    type="file"
+                    accept="application/json"
+                    onChange={handleImport}
+                  />
+                </HStack>
+              </HStack>
+            </section>
 
-        <div className="template-description">{template.description}</div>
+            {importMessage ? <Banner status="success" title={importMessage} /> : null}
+            {importError ? <Banner status="error" title={importError} /> : null}
 
-        <div className="toolbar">
-          <input
-            aria-label={`Search ${template.pluralName}`}
-            placeholder={`Search ${template.pluralName.toLowerCase()}...`}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-
-          {template.filterFields.map((fieldKey) => (
-            <select
-              aria-label={`Filter by ${fieldKey}`}
-              key={fieldKey}
-              value={filters[fieldKey] ?? 'all'}
-              onChange={(event) => setFilters({ ...filters, [fieldKey]: event.target.value })}
-            >
-              <option value="all">All {fieldKey.replaceAll('_', ' ')}</option>
-              {filterOptions(template, records, fieldKey).map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          ))}
-
-          <label className="compact-check">
-            <input
-              checked={showArchived}
-              type="checkbox"
-              onChange={(event) => setShowArchived(event.target.checked)}
+            <RecordTable
+              records={visibleRecords}
+              selectedId={selectedId}
+              template={template}
+              onEdit={startEdit}
             />
-            Archived
-          </label>
-        </div>
+          </VStack>
+        </LayoutContent>
+      </Layout>
 
-        <div className="action-bar">
-          <button type="button" onClick={() => onPreview({ title: `${template.name} collection`, value: records })}>
-            Preview JSON
-          </button>
-          <button type="button" onClick={() => onExportTemplate(template)}>
-            Export JSON
-          </button>
-          <button type="button" onClick={() => fileInputRef.current?.click()}>
-            Import JSON
-          </button>
-          <input
-            ref={fileInputRef}
-            className="hidden-input"
-            type="file"
-            accept="application/json"
-            onChange={handleImport}
-          />
-        </div>
-
-        {importMessage ? <div className="import-status">{importMessage}</div> : null}
-        {importError ? <div className="import-status import-status-error">{importError}</div> : null}
-
-        <RecordTable
-          records={visibleRecords}
-          selectedId={selectedId}
-          template={template}
-          onArchive={toggleArchive}
-          onDelete={deleteRecord}
-          onDuplicate={duplicateRecord}
-          onEdit={startEdit}
-          onPreview={(record) => onPreview({ title: recordLabel(record), value: record })}
-        />
-      </section>
-
-      {editing ? (
-        <div className="modal-backdrop edit-modal-backdrop" role="presentation">
+      <Dialog
+        isOpen={editing}
+        maxHeight="calc(100dvh - 32px)"
+        purpose="form"
+        width="min(1040px, calc(100vw - 32px))"
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setErrors({});
+            setEditing(false);
+          }
+        }}
+      >
           <RecordEditor
             errors={errors}
             record={draft}
@@ -273,12 +307,14 @@ export function TemplateWorkspace({
               setErrors({});
               setEditing(false);
             }}
+            onArchive={draftIsSaved ? () => toggleArchive(draft) : undefined}
             onChange={setDraft}
+            onDelete={draftIsSaved ? () => deleteRecord(draft) : undefined}
+            onDuplicate={draftIsSaved ? () => duplicateRecord(draft) : undefined}
             onPreview={() => onPreview({ title: recordLabel(draft), value: draft })}
             onSubmit={saveDraft}
           />
-        </div>
-      ) : null}
-    </main>
+      </Dialog>
+    </>
   );
 }

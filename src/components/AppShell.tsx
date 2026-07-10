@@ -1,3 +1,4 @@
+import { Badge, SideNav, SideNavHeading, SideNavItem, SideNavSection } from '@astryxdesign/core';
 import { templates } from '../data/templates';
 import { templatePath } from '../lib/records';
 
@@ -7,36 +8,42 @@ interface AppShellProps {
 }
 
 export function AppShell({ activeTemplateId, onNavigate }: AppShellProps) {
+  const navigate = (path: string) => (event: React.MouseEvent) => {
+    event.preventDefault();
+    onNavigate(path);
+  };
+
   return (
-    <aside className="sidebar">
-      <div className="brand-block">
-        <strong>RuleAtlas</strong>
-        <span>Detection template workspace</span>
-      </div>
-
-      <nav aria-label="RuleAtlas templates">
-        <div className="nav-group">
-          <span>Template Input</span>
-          {templates.map((template) => (
-            <button
-              className={activeTemplateId === template.id ? 'nav-item active' : 'nav-item'}
-              key={template.id}
-              type="button"
-              onClick={() => onNavigate(templatePath(template.id))}
-            >
-              {template.pluralName}
-            </button>
-          ))}
-        </div>
-
-        <button
-          className={activeTemplateId === 'import-export' ? 'nav-item active' : 'nav-item'}
-          type="button"
-          onClick={() => onNavigate('/templates/import-export')}
-        >
-          Import / Export
-        </button>
-      </nav>
-    </aside>
+    <SideNav
+      collapsible={{ defaultIsCollapsed: false, buttonLabel: 'Collapse RuleAtlas navigation' }}
+      header={
+        <SideNavHeading
+          heading="RuleAtlas"
+          subheading="Detection templates"
+          superheading="Workspace"
+          headerEndContent={<Badge label={`${templates.length}`} />}
+        />
+      }
+    >
+      <SideNavSection title="Template input">
+        {templates.map((template) => (
+          <SideNavItem
+            href={templatePath(template.id)}
+            isSelected={activeTemplateId === template.id}
+            key={template.id}
+            label={template.pluralName}
+            onClick={navigate(templatePath(template.id))}
+          />
+        ))}
+      </SideNavSection>
+      <SideNavSection title="Utilities">
+        <SideNavItem
+          href="/templates/import-export"
+          isSelected={activeTemplateId === 'import-export'}
+          label="Import / Export"
+          onClick={navigate('/templates/import-export')}
+        />
+      </SideNavSection>
+    </SideNav>
   );
 }
