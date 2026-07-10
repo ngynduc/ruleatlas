@@ -36,6 +36,8 @@ export interface RuleRepoPluginOptions {
 }
 
 interface RuleRepoConfig {
+  configPath: string;
+  repoPathInput: string;
   repoPath: string;
   contentRoot: string;
   contentRootPath: string;
@@ -62,7 +64,27 @@ export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
   return {
     name: 'ruleatlas-rule-repo',
     configureServer(server) {
-      const repoConfig = resolveRuleRepoConfig(server.config.root, options);
+      let repoConfig = resolveRuleRepoConfig(server.config.root, options);
+
+      server.middlewares.use('/api/rule-repo/config', async (request, response) => {
+        try {
+          if (request.method === 'GET') {
+            sendJson(response, 200, repoResponseFields(repoConfig));
+            return;
+          }
+
+          if (request.method === 'PUT') {
+            repoConfig = await handleConfigPut(request, server.config.root, options);
+            sendJson(response, 200, repoResponseFields(repoConfig));
+            return;
+          }
+
+          sendJson(response, 405, { error: 'Method not allowed' });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown repo config error';
+          sendJson(response, 500, { error: message });
+        }
+      });
 
       server.middlewares.use('/api/rule-repo/store', async (request, response) => {
         try {
@@ -84,6 +106,37 @@ export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
       });
     },
   };
+}
+
+async function handleConfigPut(
+  request: IncomingMessage,
+  projectRoot: string,
+  options: RuleRepoPluginOptions,
+): Promise<RuleRepoConfig> {
+  const payload = await readJson(request);
+  if (!isObject(payload)) {
+    throw new Error('Rule repo config must be an object.');
+  }
+
+  const repoPathInput = firstString(payload.path, payload.repoPath);
+  if (!repoPathInput) {
+    throw new Error('Rule repo path is required.');
+  }
+
+  const contentRoot = normalizeContentRoot(firstString(payload.contentRoot, defaultContentRoot));
+  const configPath = resolveRuleAtlasConfigPath(projectRoot, options.configPath);
+  const currentConfig = readRuleAtlasConfig(projectRoot, options.configPath);
+  const nextConfig: RuleAtlasConfigFile = {
+    ...currentConfig,
+    ruleRepo: {
+      ...currentConfig.ruleRepo,
+      path: repoPathInput,
+      contentRoot: contentRoot || '.',
+    },
+  };
+
+  await writeJson(configPath, nextConfig);
+  return ruleRepoConfigFromValues(projectRoot, repoPathInput, contentRoot, configPath);
 }
 
 async function handleGet(response: ServerResponse, repoConfig: RuleRepoConfig) {
@@ -312,7 +365,7 @@ async function writeJson(filePath: string, value: unknown) {
 
 function resolveRuleRepoConfig(projectRoot: string, options: RuleRepoPluginOptions): RuleRepoConfig {
   const config = readRuleAtlasConfig(projectRoot, options.configPath);
-  const repoPath = firstString(
+  const repoPathInput = firstString(
     process.env.RULEATLAS_RULE_REPO,
     options.repoPath,
     config.ruleRepo?.path,
@@ -328,9 +381,24 @@ function resolveRuleRepoConfig(projectRoot: string, options: RuleRepoPluginOptio
       defaultContentRoot,
     ),
   );
-  const resolvedRepoPath = path.resolve(projectRoot, repoPath);
+  return ruleRepoConfigFromValues(
+    projectRoot,
+    repoPathInput,
+    contentRoot,
+    resolveRuleAtlasConfigPath(projectRoot, options.configPath),
+  );
+}
 
+function ruleRepoConfigFromValues(
+  projectRoot: string,
+  repoPathInput: string,
+  contentRoot: string,
+  configPath: string,
+): RuleRepoConfig {
+  const resolvedRepoPath = path.resolve(projectRoot, repoPathInput);
   return {
+    configPath,
+    repoPathInput,
     repoPath: resolvedRepoPath,
     contentRoot,
     contentRootPath: contentRoot ? path.join(resolvedRepoPath, contentRoot) : resolvedRepoPath,
@@ -338,7 +406,7 @@ function resolveRuleRepoConfig(projectRoot: string, options: RuleRepoPluginOptio
 }
 
 function readRuleAtlasConfig(projectRoot: string, configPath?: string): RuleAtlasConfigFile {
-  const resolvedPath = path.resolve(projectRoot, configPath || localConfigFileName);
+  const resolvedPath = resolveRuleAtlasConfigPath(projectRoot, configPath);
   if (!existsSync(resolvedPath)) {
     return {};
   }
@@ -352,11 +420,17 @@ function readRuleAtlasConfig(projectRoot: string, configPath?: string): RuleAtla
   }
 }
 
+function resolveRuleAtlasConfigPath(projectRoot: string, configPath?: string): string {
+  return path.resolve(projectRoot, configPath || localConfigFileName);
+}
+
 function repoResponseFields(repoConfig: RuleRepoConfig) {
   return {
+    path: repoConfig.repoPathInput,
     targetRepo: repoConfig.repoPath,
     contentRoot: repoConfig.contentRoot || '.',
     contentRootPath: repoConfig.contentRootPath,
+    configPath: repoConfig.configPath,
   };
 }
 

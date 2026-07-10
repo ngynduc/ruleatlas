@@ -1,5 +1,5 @@
 import { Button, EmptyState, pixel, proportional, Table, Text, Token } from '@astryxdesign/core';
-import type { TableColumn } from '@astryxdesign/core';
+import type { TableColumn, TokenColor } from '@astryxdesign/core';
 import { fieldByKey, formatValue, recordLabel } from '../lib/records';
 import type { TemplateDefinition, TemplateRecord } from '../types';
 
@@ -22,7 +22,7 @@ export function RecordTable({
     const row: RecordTableRow = {
       id: record.id,
       record,
-      state: record.archived ? 'Archived' : 'Active',
+      state: record.archived ? 'Archived' : 'Current',
       updatedAt: record.updatedAt,
     };
 
@@ -40,6 +40,15 @@ export function RecordTable({
       width: tableColumnWidth(fieldKey, index),
       renderCell: (row: RecordTableRow) => {
         const value = formatValue(row.record.data[fieldKey]);
+        if (fieldKey === 'status') {
+          return (
+            <Token
+              color={statusColor(value)}
+              label={value || '-'}
+              size="sm"
+            />
+          );
+        }
         if (index === 0) {
           return (
             <Button
@@ -59,12 +68,12 @@ export function RecordTable({
     })),
     {
       key: 'state',
-      header: 'State',
-      width: pixel(96),
+      header: 'Catalog',
+      width: pixel(104),
       renderCell: (row: RecordTableRow) => (
         <Token
           color={row.record.archived ? 'gray' : 'green'}
-          label={row.record.archived ? 'Archived' : 'Active'}
+          label={row.record.archived ? 'Archived' : 'Current'}
           size="sm"
         />
       ),
@@ -112,6 +121,33 @@ function tableColumnWidth(fieldKey: string, index: number) {
     return pixel(112);
   }
   return proportional(1, { minWidth: 80 });
+}
+
+function statusColor(status: string): TokenColor {
+  switch (status.toLowerCase()) {
+    case 'enabled':
+    case 'available':
+    case 'approved':
+    case 'covered':
+      return 'green';
+    case 'disabled':
+    case 'missing':
+    case 'retired':
+    case 'deprecated':
+      return 'gray';
+    case 'testing':
+    case 'partial':
+    case 'in_progress':
+      return 'blue';
+    case 'draft':
+    case 'planned':
+    case 'proposed':
+      return 'yellow';
+    case 'deferred':
+      return 'orange';
+    default:
+      return 'default';
+  }
 }
 
 interface RecordTableRow extends Record<string, unknown> {

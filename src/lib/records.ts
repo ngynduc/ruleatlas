@@ -23,6 +23,9 @@ export function routeToTemplateId(pathname: string): string {
   if (leaf === 'import-export') {
     return 'import-export';
   }
+  if (leaf === 'config') {
+    return 'config';
+  }
   if (leaf && legacyRuleTemplateIds.includes(leaf)) {
     return defaultTemplateId;
   }

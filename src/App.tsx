@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppShell as AstryxAppShell,
   Banner,
@@ -13,6 +13,7 @@ import {
 } from '@astryxdesign/core';
 import { neutralTheme } from '@astryxdesign/theme-neutral/built';
 import { AppShell } from './components/AppShell';
+import { ConfigPage } from './components/ConfigPage';
 import { ImportExportPage } from './components/ImportExportPage';
 import { JsonModal } from './components/JsonModal';
 import { TemplateWorkspace } from './components/TemplateWorkspace';
@@ -45,55 +46,50 @@ export function App() {
   const firstRepoSave = useRef(true);
   const repoStoreFound = useRef(false);
 
-  useEffect(() => {
-    let mounted = true;
+  const loadRepoData = useCallback(async () => {
+    setRepoReady(false);
+    setSyncState({
+      status: 'loading',
+      message: 'Loading repo store...',
+    });
+    firstRepoSave.current = true;
+    repoStoreFound.current = false;
 
-    void loadRepoStore()
-      .then((result) => {
-        if (!mounted) {
-          return;
-        }
-
-        if (result?.store) {
-          repoStoreFound.current = true;
-          setStore(result.store);
-          setSyncState({
-            status: 'saved',
-            message: `Loaded repo store from ${result.storePath}`,
-            savedFiles: [],
-            targetRepo: result.targetRepo,
-          });
-        } else if (result) {
-          setSyncState({
-            status: 'local',
-            message: `No repo store yet at ${result.storePath}; browser data will sync on save.`,
-          });
-        } else {
-          setSyncState({
-            status: 'local',
-            message: 'Repo sync endpoint unavailable; using browser storage.',
-          });
-        }
-      })
-      .catch((error: unknown) => {
-        if (!mounted) {
-          return;
-        }
+    try {
+      const result = await loadRepoStore();
+      if (result?.store) {
+        repoStoreFound.current = true;
+        setStore(result.store);
         setSyncState({
-          status: 'error',
-          message: error instanceof Error ? error.message : 'Unable to load repo store.',
+          status: 'saved',
+          message: `Loaded repo store from ${result.storePath}`,
+          savedFiles: [],
+          targetRepo: result.targetRepo,
         });
-      })
-      .finally(() => {
-        if (mounted) {
-          setRepoReady(true);
-        }
+      } else if (result) {
+        setSyncState({
+          status: 'local',
+          message: `No repo store yet at ${result.storePath}; browser data will sync on save.`,
+        });
+      } else {
+        setSyncState({
+          status: 'local',
+          message: 'Repo sync endpoint unavailable; using browser storage.',
+        });
+      }
+    } catch (error) {
+      setSyncState({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unable to load repo store.',
       });
-
-    return () => {
-      mounted = false;
-    };
+    } finally {
+      setRepoReady(true);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadRepoData();
+  }, [loadRepoData]);
 
   useEffect(() => {
     if (!repoReady) {
@@ -197,7 +193,9 @@ export function App() {
           }
         >
           <LayoutContent label="RuleAtlas workspace">
-            {activeTemplateId === 'import-export' ? (
+            {activeTemplateId === 'config' ? (
+              <ConfigPage onSaved={() => void loadRepoData()} />
+            ) : activeTemplateId === 'import-export' ? (
               <ImportExportPage
                 store={store}
                 onExport={exportAll}

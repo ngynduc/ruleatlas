@@ -3,6 +3,18 @@ import type { TemplateStore } from '../types';
 
 const storageKey = 'ruleatlas.templates.v1';
 const repoStoreApi = '/api/rule-repo/store';
+const repoConfigApi = '/api/rule-repo/config';
+
+export interface RuleRepoConfigPayload {
+  path: string;
+  contentRoot: string;
+}
+
+export interface RuleRepoConfigResult extends RuleRepoConfigPayload {
+  targetRepo: string;
+  contentRootPath: string;
+  configPath: string;
+}
 
 export interface RepoStoreLoadResult {
   store: TemplateStore | null;
@@ -35,6 +47,36 @@ export function loadStore(): TemplateStore {
 
 export function saveStore(store: TemplateStore): void {
   window.localStorage.setItem(storageKey, JSON.stringify(normalizeStore(store), null, 2));
+}
+
+export async function loadRepoConfig(): Promise<RuleRepoConfigResult> {
+  const response = await fetch(repoConfigApi, {
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Rule repo config load failed with HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as RuleRepoConfigResult;
+}
+
+export async function saveRepoConfig(config: RuleRepoConfigPayload): Promise<RuleRepoConfigResult> {
+  const response = await fetch(repoConfigApi, {
+    body: JSON.stringify(config),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    method: 'PUT',
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? `Rule repo config save failed with HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as RuleRepoConfigResult;
 }
 
 export async function loadRepoStore(): Promise<RepoStoreLoadResult | null> {

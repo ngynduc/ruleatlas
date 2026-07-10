@@ -152,6 +152,19 @@ textarea {
   box-shadow: var(--shadow-low);
 }
 
+.config-form {
+  max-width: 760px;
+  padding: var(--spacing-4);
+}
+
+.config-section {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  padding: var(--spacing-4);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .app-status-bar {
     align-items: flex-start;

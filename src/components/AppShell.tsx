@@ -43,6 +43,12 @@ export function AppShell({ activeTemplateId, onNavigate }: AppShellProps) {
           label="Import / Export"
           onClick={navigate('/templates/import-export')}
         />
+        <SideNavItem
+          href="/templates/config"
+          isSelected={activeTemplateId === 'config'}
+          label="Config"
+          onClick={navigate('/templates/config')}
+        />
       </SideNavSection>
     </SideNav>
   );
