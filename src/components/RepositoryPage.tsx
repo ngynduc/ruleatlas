@@ -15,6 +15,7 @@ import {
   Text,
   TextArea,
   TextInput,
+  useToast,
   VStack,
 } from '@astryxdesign/core';
 import {
@@ -34,10 +35,10 @@ import type { TableColumn } from '@astryxdesign/core';
 type RepositoryAction = 'branch' | 'fetch' | 'load' | 'pull' | 'publish' | null;
 
 export function RepositoryPage() {
+  const toast = useToast();
   const [status, setStatus] = useState<GitRepositoryStatus | null>(null);
   const [action, setAction] = useState<RepositoryAction>('load');
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [published, setPublished] = useState<PublishPullRequestResult | null>(null);
   const [branch, setBranch] = useState('feat/ruleatlas-update');
   const [baseBranch, setBaseBranch] = useState('main');
@@ -78,13 +79,23 @@ export function RepositoryPage() {
   ) => {
     setAction(nextAction);
     setError(null);
-    setMessage(null);
     setPublished(null);
     try {
       applyStatus(await operation());
-      setMessage(successMessage);
+      toast({
+        body: successMessage,
+        collisionBehavior: 'overwrite',
+        uniqueID: `repository-${nextAction}`,
+      });
     } catch (operationError) {
-      setError(errorMessage(operationError));
+      const nextError = errorMessage(operationError);
+      setError(nextError);
+      toast({
+        body: nextError,
+        collisionBehavior: 'overwrite',
+        type: 'error',
+        uniqueID: `repository-${nextAction}`,
+      });
     } finally {
       setAction(null);
     }
@@ -93,7 +104,6 @@ export function RepositoryPage() {
   const publish = async () => {
     setAction('publish');
     setError(null);
-    setMessage(null);
     setPublished(null);
     try {
       const result = await publishRepositoryPullRequest({
@@ -105,13 +115,26 @@ export function RepositoryPage() {
       });
       setPublished(result);
       applyStatus(result.repository);
-      setMessage(result.created ? 'Pull request created.' : 'Branch pushed; the open pull request was reused.');
+      toast({
+        body: result.created ? 'Pull request created.' : 'Branch pushed; the open pull request was reused.',
+        collisionBehavior: 'overwrite',
+        uniqueID: 'repository-publish',
+      });
     } catch (publishError) {
-      setError(errorMessage(publishError));
+      const nextError = errorMessage(publishError);
+      setError(nextError);
+      toast({
+        body: nextError,
+        collisionBehavior: 'overwrite',
+        type: 'error',
+        uniqueID: 'repository-publish',
+      });
     } finally {
       setAction(null);
     }
   };
+
+  const publishBlocker = repositoryPublishBlocker(status, baseBranch);
 
   const columns: TableColumn<RepositoryChangedFile>[] = [
     {
@@ -180,14 +203,6 @@ export function RepositoryPage() {
       <LayoutContent label="Repository operations">
         <VStack gap={4} padding={4}>
           {error ? <Banner status="error" title={error} /> : null}
-          {message ? (
-            <Banner
-              isDismissable
-              status="success"
-              title={message}
-              onDismiss={() => setMessage(null)}
-            />
-          ) : null}
           {status && !status.isGitRepository ? (
             <Banner
               status="warning"
@@ -255,6 +270,13 @@ export function RepositoryPage() {
                   )}
                 />
               </HStack>
+              {publishBlocker ? (
+                <Banner
+                  status="warning"
+                  title={publishBlocker.title}
+                  description={publishBlocker.description}
+                />
+              ) : null}
               <TextInput isRequired label="Commit message" value={commitMessage} onChange={setCommitMessage} />
               <TextInput isRequired label="Pull request title" value={pullRequestTitle} onChange={setPullRequestTitle} />
               <TextArea
@@ -271,7 +293,8 @@ export function RepositoryPage() {
                     !branch.trim() ||
                     !baseBranch.trim() ||
                     !commitMessage.trim() ||
-                    !pullRequestTitle.trim()
+                    !pullRequestTitle.trim() ||
+                    Boolean(publishBlocker)
                   }
                   isLoading={action === 'publish'}
                   label="Commit, push & create PR"
@@ -301,6 +324,31 @@ export function RepositoryPage() {
       </LayoutContent>
     </Layout>
   );
+}
+
+function repositoryPublishBlocker(
+  status: GitRepositoryStatus | null,
+  baseBranch: string,
+): { title: string; description: string } | null {
+  if (!status?.isGitRepository || baseBranch.trim() !== status.baseBranch) {
+    return null;
+  }
+
+  if (!status.baseBranchAvailable) {
+    return {
+      title: `Base branch ${status.baseBranch} is not available from ${status.remote}`,
+      description: 'Fetch the remote, or create and push the base branch before publishing a pull request.',
+    };
+  }
+
+  if (status.clean && status.commitsAheadOfBase === 0) {
+    return {
+      title: 'Nothing to publish yet',
+      description: `Edit a rule or add a commit on ${status.branch} before creating a pull request.`,
+    };
+  }
+
+  return null;
 }
 
 function SummaryCell({ label, value, success }: { label: string; value: string; success?: boolean }) {

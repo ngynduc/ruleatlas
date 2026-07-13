@@ -16,6 +16,8 @@ export interface GitRepositoryStatus {
   remote: string;
   remoteUrl: string;
   baseBranch: string;
+  baseBranchAvailable: boolean;
+  commitsAheadOfBase: number;
   trackingBranch: string | null;
   ahead: number;
   behind: number;

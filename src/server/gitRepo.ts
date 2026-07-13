@@ -37,6 +37,8 @@ export interface GitRepositoryStatus {
   remote: string;
   remoteUrl: string;
   baseBranch: string;
+  baseBranchAvailable: boolean;
+  commitsAheadOfBase: number;
   trackingBranch: string | null;
   ahead: number;
   behind: number;
@@ -124,17 +126,20 @@ export async function pullGitRepository(config: RuleRepoConfig): Promise<GitRepo
 
 export async function getGitRepositoryStatus(config: RuleRepoConfig): Promise<GitRepositoryStatus> {
   validateGitRemoteName(config.githubRemote);
+  validateGitBranchName(config.githubBaseBranch);
   const isGitRepository = await isGitRepo(config.repoPath);
   if (!isGitRepository) {
     return emptyStatus(config);
   }
 
-  const [branchResult, headResult, remoteUrlResult, trackingResult, statusResult] = await Promise.all([
+  const baseBranchRef = `refs/remotes/${config.githubRemote}/${config.githubBaseBranch}`;
+  const [branchResult, headResult, remoteUrlResult, trackingResult, statusResult, baseBranchResult] = await Promise.all([
     runGit(config.repoPath, ['branch', '--show-current']),
     runGit(config.repoPath, ['rev-parse', '--short', '--verify', '--quiet', 'HEAD'], [0, 1]),
     runGit(config.repoPath, ['remote', 'get-url', config.githubRemote], [0, 2]),
     runGit(config.repoPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], [0, 128]),
     runGit(config.repoPath, ['status', '--porcelain=v1', '--untracked-files=all']),
+    runGit(config.repoPath, ['rev-parse', '--verify', '--quiet', `${baseBranchRef}^{commit}`], [0, 1]),
   ]);
 
   const branch = branchResult.stdout.trim() || '(detached HEAD)';
@@ -142,9 +147,15 @@ export async function getGitRepositoryStatus(config: RuleRepoConfig): Promise<Gi
   const divergence = trackingBranch
     ? await runGit(config.repoPath, ['rev-list', '--left-right', '--count', `${trackingBranch}...HEAD`], [0, 128])
     : null;
+  const commitsAheadOfBaseResult = baseBranchResult.exitCode === 0 && headResult.exitCode === 0
+    ? await runGit(config.repoPath, ['rev-list', '--count', `${baseBranchRef}..HEAD`], [0, 128])
+    : null;
   const [behind = 0, ahead = 0] = divergence?.exitCode === 0
     ? divergence.stdout.trim().split(/\s+/).map((value) => Number(value) || 0)
     : [0, 0];
+  const commitsAheadOfBase = commitsAheadOfBaseResult?.exitCode === 0
+    ? Number(commitsAheadOfBaseResult.stdout.trim()) || 0
+    : 0;
   const changedFiles = parseChangedFiles(statusResult.stdout);
   const remoteUrl = remoteUrlResult.exitCode === 0 ? remoteUrlResult.stdout.trim() : '';
 
@@ -156,6 +167,8 @@ export async function getGitRepositoryStatus(config: RuleRepoConfig): Promise<Gi
     remote: config.githubRemote,
     remoteUrl,
     baseBranch: config.githubBaseBranch,
+    baseBranchAvailable: baseBranchResult.exitCode === 0,
+    commitsAheadOfBase,
     trackingBranch,
     ahead,
     behind,
@@ -203,6 +216,21 @@ export async function publishPullRequest(config: RuleRepoConfig, input: PublishR
     throw new ApiError(422, 'invalid_branch', 'Pull request branch must differ from the base branch.');
   }
 
+  const baseBranchRef = `refs/remotes/${config.githubRemote}/${baseBranch}`;
+  const baseBranchResult = await runGit(
+    config.repoPath,
+    ['rev-parse', '--verify', '--quiet', `${baseBranchRef}^{commit}`],
+    [0, 1],
+  );
+  if (baseBranchResult.exitCode !== 0) {
+    throw new ApiError(
+      422,
+      'base_branch_not_found',
+      `Base branch ${baseBranch} is not available from ${config.githubRemote}. Fetch the remote or create and push the base branch before publishing.`,
+      { baseBranch, remote: config.githubRemote },
+    );
+  }
+
   if (status.branch !== branch) {
     const branchExists = await runGit(config.repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], [0, 1]);
     await runGit(config.repoPath, branchExists.exitCode === 0 ? ['switch', branch] : ['switch', '-c', branch]);
@@ -215,7 +243,7 @@ export async function publishPullRequest(config: RuleRepoConfig, input: PublishR
     await runGit(config.repoPath, ['commit', '-m', input.commitMessage]);
   }
 
-  const aheadOfBase = await runGit(config.repoPath, ['rev-list', '--count', `${baseBranch}..HEAD`], [0, 128]);
+  const aheadOfBase = await runGit(config.repoPath, ['rev-list', '--count', `${baseBranchRef}..HEAD`], [0, 128]);
   if (!commitCreated && (aheadOfBase.exitCode !== 0 || Number(aheadOfBase.stdout.trim()) === 0)) {
     throw new ApiError(409, 'nothing_to_publish', 'There are no commits or working-tree changes to publish.');
   }
@@ -391,6 +419,8 @@ function emptyStatus(config: RuleRepoConfig): GitRepositoryStatus {
     remote: config.githubRemote,
     remoteUrl: '',
     baseBranch: config.githubBaseBranch,
+    baseBranchAvailable: false,
+    commitsAheadOfBase: 0,
     trackingBranch: null,
     ahead: 0,
     behind: 0,

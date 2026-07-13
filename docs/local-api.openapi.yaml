@@ -70,7 +70,9 @@ paths:
   /api/rule-repo/git/pull-requests:
     post:
       summary: Commit, push, and create or reuse a GitHub pull request
-      description: Idempotent for an existing open head/base pull request.
+      description: >-
+        Validates that the configured remote base branch is available before staging changes.
+        Idempotent for an existing open head/base pull request.
       requestBody:
         required: true
         content:
@@ -167,6 +169,13 @@ components:
         isGitRepository: { type: boolean }
         branch: { type: string }
         head: { type: string }
+        baseBranch: { type: string }
+        baseBranchAvailable:
+          type: boolean
+          description: Whether the configured base branch exists as a remote-tracking ref.
+        commitsAheadOfBase:
+          type: integer
+          minimum: 0
         clean: { type: boolean }
         ahead: { type: integer }
         behind: { type: integer }

@@ -53,6 +53,8 @@ npm run dev -- --host 127.0.0.1
 
 Open **Repository** to review the current branch and changed files, fetch or fast-forward pull, create a feature branch, and publish a pull request. Publishing stages the configured rules repository, creates a commit when necessary, pushes the branch, and creates or reuses an open GitHub PR.
 
+The Repository page reports branch actions as notifications and blocks publishing when the remote base branch is unavailable or the current branch has no changes or commits ahead of that base. Use **Fetch** after creating or pushing the base branch so RuleAtlas can verify it before publishing.
+
 Authenticate with either option:
 
 ```bash

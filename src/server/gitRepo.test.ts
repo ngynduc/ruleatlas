@@ -42,6 +42,8 @@ describe('Git repository service', () => {
     expect(status.isGitRepository).toBe(true);
     expect(status.branch).toBe('main');
     expect(status.clean).toBe(false);
+    expect(status.baseBranchAvailable).toBe(false);
+    expect(status.commitsAheadOfBase).toBe(0);
     expect(status.changedFiles[0]).toMatchObject({ path: 'rule.json', worktreeStatus: 'M' });
     expect(status.github).toEqual({ owner: 'splunk', repository: 'attack_data' });
   });
@@ -55,7 +57,9 @@ describe('Git repository service', () => {
 
     expect(status).toMatchObject({
       branch: 'main',
+      baseBranchAvailable: false,
       clean: true,
+      commitsAheadOfBase: 0,
       head: '',
       isGitRepository: true,
       trackingBranch: null,
@@ -90,35 +94,85 @@ describe('Git repository service', () => {
     await git(repository, ['commit', '-m', 'initial']);
     await git(repository, ['remote', 'add', 'origin', 'https://github.com/example/detections.git']);
     await git(repository, ['remote', 'set-url', '--push', 'origin', bareRemote]);
+    await git(repository, ['push', '--set-upstream', 'origin', 'main']);
     await writeFile(path.join(repository, 'rule.json'), '{"updated":true}\n');
 
     process.env.GITHUB_TOKEN = 'test-token';
+    const pullRequest = {
+      html_url: 'https://github.com/example/detections/pull/42',
+      number: 42,
+      state: 'open',
+      title: 'Update detection',
+    };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        html_url: 'https://github.com/example/detections/pull/42',
-        number: 42,
-        state: 'open',
-        title: 'Update detection',
-      }), { status: 201 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(pullRequest), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([pullRequest]), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await publishPullRequest(configFor(repository), {
+    const input = {
       baseBranch: 'main',
       body: 'Tested by RuleAtlas.',
       branch: 'feat/update-detection',
       commitMessage: 'feat(rules): update detection',
       title: 'Update detection',
-    });
+    };
+    const result = await publishPullRequest(configFor(repository), input);
 
     expect(result.created).toBe(true);
     expect(result.commitCreated).toBe(true);
     expect(result.pullRequest.url).toBe('https://github.com/example/detections/pull/42');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.repository.baseBranchAvailable).toBe(true);
+    expect(result.repository.commitsAheadOfBase).toBe(1);
+
+    const retried = await publishPullRequest(configFor(repository), input);
+    expect(retried.created).toBe(false);
+    expect(retried.commitCreated).toBe(false);
+    expect(retried.commit).toBe(result.commit);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const remoteCommit = await execFileAsync('git', [
       '--git-dir', bareRemote, 'rev-parse', 'refs/heads/feat/update-detection',
     ]);
     expect(remoteCommit.stdout.trim()).toBe(result.commit);
+  });
+
+  it('rejects a missing remote base branch before committing or pushing', async () => {
+    const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'ruleatlas-missing-base-'));
+    temporaryDirectories.push(fixtureRoot);
+    const repository = path.join(fixtureRoot, 'working');
+    const bareRemote = path.join(fixtureRoot, 'remote.git');
+    await mkdir(repository);
+    await execFileAsync('git', ['init', '--bare', bareRemote], { cwd: fixtureRoot });
+    await git(repository, ['init', '-b', 'main']);
+    await git(repository, ['config', 'user.email', 'ruleatlas@example.test']);
+    await git(repository, ['config', 'user.name', 'RuleAtlas Test']);
+    await writeFile(path.join(repository, 'rule.json'), '{}\n');
+    await git(repository, ['add', 'rule.json']);
+    await git(repository, ['commit', '-m', 'initial']);
+    await git(repository, ['remote', 'add', 'origin', 'https://github.com/example/detections.git']);
+    await git(repository, ['remote', 'set-url', '--push', 'origin', bareRemote]);
+    await writeFile(path.join(repository, 'rule.json'), '{"updated":true}\n');
+
+    process.env.GITHUB_TOKEN = 'test-token';
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(publishPullRequest(configFor(repository), {
+      baseBranch: 'main',
+      body: 'Tested by RuleAtlas.',
+      branch: 'feat/update-detection',
+      commitMessage: 'feat(rules): update detection',
+      title: 'Update detection',
+    })).rejects.toMatchObject({ code: 'base_branch_not_found', statusCode: 422 });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await getGitRepositoryStatus(configFor(repository))).toMatchObject({
+      baseBranchAvailable: false,
+      branch: 'main',
+      clean: false,
+    });
+    const commitCount = await execFileAsync('git', ['rev-list', '--count', 'HEAD'], { cwd: repository });
+    expect(commitCount.stdout.trim()).toBe('1');
   });
 
   it('fetches and fast-forward pulls a clean branch from its remote', async () => {
