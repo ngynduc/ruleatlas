@@ -276,7 +276,6 @@ export function TemplateWorkspace({
 
             {importMessage ? <Banner status="success" title={importMessage} /> : null}
             {importError ? <Banner status="error" title={importError} /> : null}
-
             <RecordTable
               records={visibleRecords}
               selectedId={selectedId}
