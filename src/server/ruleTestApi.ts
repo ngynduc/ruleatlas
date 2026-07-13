@@ -4,7 +4,7 @@ import { discoverAttackData, listAttackData, pullAttackDataFiles } from './attac
 import type { AttackDataPullProgress, RuleTestInput } from './attackData';
 import { ApiError, assertObject, readJsonBody, requestPath, sendApiError, sendJson } from './http';
 import { assertSplunkTestConfigured, executeSplunkRuleTest } from './splunkTestEngine';
-import type { SplunkTestProgress } from './splunkTestEngine';
+import type { RuleTestMode, RuleTestRunResult, SplunkTestProgress } from './splunkTestEngine';
 import {
   completeRuleTestRunStatus,
   createRuleTestRunStatus,
@@ -64,42 +64,55 @@ export async function handleRuleTestApi(
         const payload = assertObject(await readJsonBody(request));
         const rule = parseRule(payload.rule);
         const identity = ruleIdentity(rule);
+        const mode = parseRuleTestMode(payload.mode);
         runId = parseRunId(payload.runId, identity.ruleId);
-        createRuleTestRunStatus(runId, identity.ruleId, identity.ruleName);
-        assertSplunkTestConfigured(config);
-        const discovery = await discoverAttackData(
-          config.attackDataPath,
-          rule,
-          config.attackDataMaxDatasets,
-          parseSelectedDatasetPaths(payload.selectedDatasetPaths),
-        );
-        if (discovery.matches.length === 0) {
-          throw new ApiError(422, 'attack_data_not_found', 'No attack-data datasets were selected or matched to the rule.', {
-            scannedManifests: discovery.scannedManifests,
+        createRuleTestRunStatus(runId, identity.ruleId, identity.ruleName, mode);
+        assertSplunkTestConfigured(config, mode);
+        let result: RuleTestRunResult;
+        if (mode === 'historical') {
+          result = await executeSplunkRuleTest(config, rule, {
+            mode,
+            earliestTime: parseSplunkTime(payload.earliestTime, '-24h', 'earliestTime'),
+            latestTime: parseSplunkTime(payload.latestTime, 'now', 'latestTime'),
+            runId,
+            onProgress: (progress) => recordSplunkProgress(runId as string, progress, mode),
+          });
+        } else {
+          const discovery = await discoverAttackData(
+            config.attackDataPath,
+            rule,
+            config.attackDataMaxDatasets,
+            parseSelectedDatasetPaths(payload.selectedDatasetPaths),
+          );
+          if (discovery.matches.length === 0) {
+            throw new ApiError(422, 'attack_data_not_found', 'No attack-data datasets were selected or matched to the rule.', {
+              scannedManifests: discovery.scannedManifests,
+            });
+          }
+          const totalFiles = discovery.matches.reduce((count, match) => count + match.datasets.length, 0);
+          updateRuleTestRunStatus(runId, {
+            selectionMode: discovery.selectionMode,
+            totalFiles,
+          }, {
+            phase: 'preparing',
+            level: 'success',
+            message: `Selected ${totalFiles} dataset file(s) from ${discovery.matches.length} manifest(s).`,
+            detail: discovery.selectionMode === 'explicit' ? 'Explicit dataset selection' : 'Mapping fallback',
+          });
+          const materialized = await pullAttackDataFiles(
+            config.attackDataPath,
+            discovery.matches,
+            (progress) => recordPullProgress(runId as string, progress),
+          );
+          result = await executeSplunkRuleTest(config, rule, {
+            mode,
+            discovery,
+            files: materialized.files,
+            pulledAttackData: materialized.pulled,
+            runId,
+            onProgress: (progress) => recordSplunkProgress(runId as string, progress, mode),
           });
         }
-        const totalFiles = discovery.matches.reduce((count, match) => count + match.datasets.length, 0);
-        updateRuleTestRunStatus(runId, {
-          selectionMode: discovery.selectionMode,
-          totalFiles,
-        }, {
-          phase: 'preparing',
-          level: 'success',
-          message: `Selected ${totalFiles} dataset file(s) from ${discovery.matches.length} manifest(s).`,
-          detail: discovery.selectionMode === 'explicit' ? 'Explicit dataset selection' : 'Mapping fallback',
-        });
-        const materialized = await pullAttackDataFiles(
-          config.attackDataPath,
-          discovery.matches,
-          (progress) => recordPullProgress(runId as string, progress),
-        );
-        const result = await executeSplunkRuleTest(config, rule, {
-          discovery,
-          files: materialized.files,
-          pulledAttackData: materialized.pulled,
-          runId,
-          onProgress: (progress) => recordSplunkProgress(runId as string, progress),
-        });
         completeRuleTestRunStatus(runId, result);
         sendJson(response, 201, result);
       } catch (error) {
@@ -135,6 +148,27 @@ function parseSelectedDatasetPaths(value: unknown): string[] {
     throw new ApiError(422, 'invalid_dataset_selection', 'Selected dataset paths must be an array of strings.');
   }
   return value;
+}
+
+function parseRuleTestMode(value: unknown): RuleTestMode {
+  if (value === undefined || value === 'attack_data') {
+    return 'attack_data';
+  }
+  if (value === 'historical') {
+    return value;
+  }
+  throw new ApiError(422, 'invalid_test_mode', 'Rule-test mode must be attack_data or historical.');
+}
+
+function parseSplunkTime(value: unknown, fallback: string, field: string): string {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = typeof value === 'string' ? value.trim() : '';
+  if (!parsed || parsed.length > 128 || /[\r\n\0]/.test(parsed)) {
+    throw new ApiError(422, 'invalid_time_range', `${field} must be a valid non-empty Splunk time value.`);
+  }
+  return parsed;
 }
 
 function parseRunId(value: unknown, fallbackRuleId = 'rule'): string {
@@ -203,7 +237,11 @@ function recordPullProgress(runId: string, progress: AttackDataPullProgress): vo
   });
 }
 
-function recordSplunkProgress(runId: string, progress: SplunkTestProgress): void {
+function recordSplunkProgress(
+  runId: string,
+  progress: SplunkTestProgress,
+  mode: RuleTestMode = 'attack_data',
+): void {
   if (progress.type === 'ingest_started') {
     updateRuleTestRunStatus(runId, { phase: 'ingesting' }, {
       phase: 'ingesting',
@@ -232,8 +270,14 @@ function recordSplunkProgress(runId: string, progress: SplunkTestProgress): void
     }, {
       phase: 'searching',
       level: 'info',
-      message: 'Ingestion requests completed; checking when the replayed events become searchable.',
-      detail: progress.queryScoped ? 'Search is scoped to this run host.' : 'Generating search could not be scoped to the run host.',
+      message: mode === 'historical'
+        ? 'Searching existing Splunk data with the original rule query.'
+        : 'Ingestion requests completed; checking when the replayed events become searchable.',
+      detail: mode === 'historical'
+        ? 'No attack-data files were ingested and the original index constraints are preserved.'
+        : progress.queryScoped
+          ? 'Search is scoped to this run host and the configured test index.'
+          : 'Generating search could not be scoped to the run host or test index.',
     });
     return;
   }
@@ -246,9 +290,13 @@ function recordSplunkProgress(runId: string, progress: SplunkTestProgress): void
   }, {
     phase: 'searching',
     level: progress.resultCount > 0 ? 'success' : 'warning',
-    message: progress.resultCount > 0
-      ? `Search attempt ${progress.attempt}/${progress.totalAttempts} found ${progress.resultCount} result(s).`
-      : `Search attempt ${progress.attempt}/${progress.totalAttempts} returned no results yet.`,
+    message: mode === 'historical'
+      ? progress.resultCount > 0
+        ? `Historical search found ${progress.resultCount} result(s).`
+        : 'Historical search returned no results.'
+      : progress.resultCount > 0
+        ? `Search attempt ${progress.attempt}/${progress.totalAttempts} found ${progress.resultCount} result(s).`
+        : `Search attempt ${progress.attempt}/${progress.totalAttempts} returned no results yet.`,
   });
 }
 

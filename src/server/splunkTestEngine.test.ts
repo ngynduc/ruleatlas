@@ -17,15 +17,20 @@ afterEach(async () => {
 
 describe('Splunk rule test engine', () => {
   it('ingests selected data and passes when the rule search returns results', async () => {
-    const requests: Array<{ url: string; authorization: string }> = [];
+    const requests: Array<{ url: string; authorization: string; body: string }> = [];
     const progress: SplunkTestProgress[] = [];
     const server = http.createServer((request, response) => {
-      requests.push({
-        url: request.url ?? '',
-        authorization: String(request.headers.authorization ?? ''),
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => {
+        body += chunk;
       });
-      request.resume();
       request.on('end', () => {
+        requests.push({
+          url: request.url ?? '',
+          authorization: String(request.headers.authorization ?? ''),
+          body,
+        });
         response.statusCode = 200;
         response.setHeader('Content-Type', 'application/json');
         response.end(request.url?.includes('/services/collector/raw')
@@ -51,7 +56,7 @@ describe('Splunk rule test engine', () => {
           rule_id: 'RA-TEST',
           name: 'Scheduled task test',
           platform: 'Splunk',
-          query: 'index=attack_data EventCode=1 | stats count',
+          query: 'index=production EventCode=1 | stats count',
         },
       }, {
         discovery: {
@@ -84,17 +89,25 @@ describe('Splunk rule test engine', () => {
           localPath: dataFile,
         }],
         pulledAttackData: false,
+        mode: 'attack_data',
         runId: 'ruleatlas-test-run',
         onProgress: (event) => progress.push(event),
       });
 
       expect(result.passed).toBe(true);
+      expect(result.mode).toBe('attack_data');
       expect(result.selectionMode).toBe('mapping');
       expect(result.resultCount).toBe(1);
-      expect(result.query).toContain('host="ruleatlas-test-run"');
+      expect(result.query).toBe('search index="attack_data" EventCode=1 host="ruleatlas-test-run" | stats count');
+      expect(result.originalQuery).toBe('index=production EventCode=1 | stats count');
+      expect(result.testIndex).toBe('attack_data');
+      expect(result.earliestTime).toBe('-5m');
+      expect(result.latestTime).toBe('now');
       expect(requests).toHaveLength(2);
       expect(requests[0].authorization).toBe('Splunk hec-test-token');
       expect(requests[1].authorization).toBe('Splunk api-test-token');
+      expect(new URLSearchParams(requests[1].body).get('earliest_time')).toBe('-5m');
+      expect(new URLSearchParams(requests[1].body).get('latest_time')).toBe('now');
       expect(progress.map((event) => event.type)).toEqual([
         'ingest_started',
         'ingest_accepted',
@@ -112,12 +125,92 @@ describe('Splunk rule test engine', () => {
     }
   });
 
-  it('scopes standard searches and counts only result objects', () => {
-    expect(scopeSplunkQuery('index=main | stats count', 'run-1')).toEqual({
-      query: 'search index=main host="run-1" | stats count',
+  it('overrides the base index, scopes standard searches, and counts only result objects', () => {
+    expect(scopeSplunkQuery('index=main | stats count', 'run-1', 'attack_data')).toEqual({
+      query: 'search index="attack_data" host="run-1" | stats count',
       scoped: true,
+      indexOverridden: true,
+    });
+    expect(scopeSplunkQuery('sourcetype=sysmon | stats count', 'run-2', 'attack_data')).toEqual({
+      query: 'search sourcetype=sysmon index="attack_data" host="run-2" | stats count',
+      scoped: true,
+      indexOverridden: true,
+    });
+    expect(scopeSplunkQuery('index IN (main, security) EventCode=1', 'run-3', 'attack_data')).toEqual({
+      query: 'search index="attack_data" EventCode=1 host="run-3"',
+      scoped: true,
+      indexOverridden: true,
+    });
+    expect(scopeSplunkQuery('| tstats count where index=main', 'run-4', 'attack_data')).toEqual({
+      query: '| tstats count where index=main',
+      scoped: false,
+      indexOverridden: false,
     });
     expect(parseSplunkExportResults('{"result":{"x":1}}\n{"preview":false}\nnot-json')).toBe(1);
+  });
+
+  it('searches historical data with the original index and without HEC credentials', async () => {
+    const requests: Array<{ url: string; body: string }> = [];
+    const progress: SplunkTestProgress[] = [];
+    const server = http.createServer((request, response) => {
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      request.on('end', () => {
+        requests.push({ url: request.url ?? '', body });
+        response.statusCode = 200;
+        response.setHeader('Content-Type', 'application/json');
+        response.end('{"result":{"source":"historical"}}\n');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Mock Splunk server did not start.');
+      process.env.SPLUNK_API_TOKEN = 'api-test-token';
+
+      const result = await executeSplunkRuleTest(configFor(tmpdir(), address.port), {
+        id: 'RA-HISTORICAL',
+        data: {
+          rule_id: 'RA-HISTORICAL',
+          name: 'Historical process test',
+          platform: 'Splunk',
+          query: 'index=security EventCode=4688 | stats count',
+        },
+      }, {
+        mode: 'historical',
+        earliestTime: '-7d',
+        latestTime: 'now',
+        runId: 'ruleatlas-historical-run',
+        onProgress: (event) => progress.push(event),
+      });
+
+      expect(result).toMatchObject({
+        mode: 'historical',
+        passed: true,
+        query: 'search index=security EventCode=4688 | stats count',
+        originalQuery: 'index=security EventCode=4688 | stats count',
+        queryScoped: false,
+        earliestTime: '-7d',
+        latestTime: 'now',
+        searchAttempts: 1,
+        pulledAttackData: false,
+        selectedManifests: [],
+        ingestedFiles: [],
+      });
+      expect(requests).toHaveLength(1);
+      expect(requests[0].url).toContain('/services/search/jobs/export');
+      const search = new URLSearchParams(requests[0].body);
+      expect(search.get('search')).toBe('search index=security EventCode=4688 | stats count');
+      expect(search.get('earliest_time')).toBe('-7d');
+      expect(search.get('latest_time')).toBe('now');
+      expect(progress.map((event) => event.type)).toEqual(['search_started', 'search_attempt']);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it('reports a HEC rejection before search and never marks the file accepted', async () => {

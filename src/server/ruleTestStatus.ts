@@ -1,5 +1,5 @@
 import { ApiError } from './http';
-import type { RuleTestRunResult } from './splunkTestEngine';
+import type { RuleTestMode, RuleTestRunResult } from './splunkTestEngine';
 
 export type RuleTestRunPhase = 'preparing' | 'fetching' | 'ingesting' | 'searching' | 'complete' | 'failed';
 export type RuleTestRunState = 'running' | 'completed' | 'failed';
@@ -18,6 +18,7 @@ export interface RuleTestRunStatus {
   runId: string;
   ruleId: string;
   ruleName: string;
+  mode: RuleTestMode;
   state: RuleTestRunState;
   phase: RuleTestRunPhase;
   startedAt: string;
@@ -67,12 +68,14 @@ export function createRuleTestRunStatus(
   runId: string,
   ruleId: string,
   ruleName: string,
+  mode: RuleTestMode = 'attack_data',
 ): RuleTestRunStatus {
   const now = new Date().toISOString();
   const status: RuleTestRunStatus = {
     runId,
     ruleId,
     ruleName,
+    mode,
     state: 'running',
     phase: 'preparing',
     startedAt: now,
@@ -87,7 +90,9 @@ export function createRuleTestRunStatus(
     events: [eventFor({
       phase: 'preparing',
       level: 'info',
-      message: 'Preparing the rule test and attack-data selection.',
+      message: mode === 'historical'
+        ? 'Preparing a historical search against existing Splunk data.'
+        : 'Preparing the rule test and attack-data selection.',
     }, now)],
   };
   statuses.set(runId, status);
@@ -135,9 +140,13 @@ export function completeRuleTestRunStatus(
     events: [...current.events, eventFor({
       phase: 'complete',
       level: result.passed ? 'success' : 'warning',
-      message: result.passed
-        ? `Test completed with ${result.resultCount} matching result(s).`
-        : 'Test completed after ingestion, but the rule returned no results.',
+      message: result.mode === 'historical'
+        ? result.passed
+          ? `Historical test completed with ${result.resultCount} matching result(s).`
+          : 'Historical test completed, but the original rule query returned no results.'
+        : result.passed
+          ? `Test completed with ${result.resultCount} matching result(s).`
+          : 'Test completed after ingestion, but the rule returned no results.',
     }, now)].slice(-maximumEventsPerRun),
   };
   statuses.set(runId, next);

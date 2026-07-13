@@ -10,6 +10,8 @@ import {
   MultiSelector,
   pixel,
   proportional,
+  SegmentedControl,
+  SegmentedControlItem,
   Selector,
   StackItem,
   Table,
@@ -30,6 +32,7 @@ import type {
   AttackDataCatalog,
   AttackDataCatalogEntry,
   AttackDataMatch,
+  RuleTestMode,
   RuleTestRunStatus,
 } from '../lib/ruleTestApi';
 import {
@@ -83,6 +86,7 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [datasetSearch, setDatasetSearch] = useState('');
   const activeRun = useRef<AbortController | null>(null);
 
@@ -93,18 +97,22 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
   useEffect(() => () => activeRun.current?.abort(), []);
 
   useEffect(() => {
+    if (workspace.mode !== 'attack_data') {
+      setIsCatalogLoading(false);
+      return;
+    }
     let active = true;
     setIsCatalogLoading(true);
     void listAttackDataCatalog()
       .then((nextCatalog) => {
         if (active) {
           setCatalog(nextCatalog);
-          setError(null);
+          setCatalogError(null);
         }
       })
       .catch((catalogError: unknown) => {
         if (active) {
-          setError(catalogError instanceof Error ? catalogError.message : 'Unable to load attack-data datasets.');
+          setCatalogError(catalogError instanceof Error ? catalogError.message : 'Unable to load attack-data datasets.');
         }
       })
       .finally(() => {
@@ -115,7 +123,7 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [workspace.mode]);
 
   const splunkRules = useMemo(
     () => rules.filter((rule) => String(rule.data.platform).toLowerCase() === 'splunk'),
@@ -204,6 +212,12 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
     setError(null);
   };
 
+  const selectMode = (value: string) => {
+    const mode: RuleTestMode = value === 'historical' ? 'historical' : 'attack_data';
+    updateWorkspace({ mode, result: null, runStatus: null });
+    setError(null);
+  };
+
   const previewDatasets = async () => {
     if (!workspace.rule) {
       setError('Choose a stored Splunk rule before previewing attack-data.');
@@ -239,7 +253,13 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
       controller.signal,
     );
     try {
-      const result = await runRuleTest(workspace.rule, workspace.selectedDatasetPaths, runId);
+      const result = await runRuleTest(workspace.rule, {
+        mode: workspace.mode,
+        selectedDatasetPaths: workspace.mode === 'attack_data' ? workspace.selectedDatasetPaths : [],
+        earliestTime: workspace.earliestTime,
+        latestTime: workspace.latestTime,
+        runId,
+      });
       const runStatus = await loadFinalRunStatus(runId);
       updateWorkspace({ result, ...(runStatus ? { runStatus } : {}) });
     } catch (runError) {
@@ -259,6 +279,9 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
   };
 
   const usesMappingFallback = workspace.selectedDatasetPaths.length === 0;
+  const attackDataUnavailable = isCatalogLoading || Boolean(catalogError && !catalog);
+  const historicalWindowInvalid = workspace.mode === 'historical'
+    && (!workspace.earliestTime.trim() || !workspace.latestTime.trim());
 
   return (
     <Layout
@@ -270,14 +293,16 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
               <VStack gap={1}>
                 <Heading level={1}>Rule testing</Heading>
                 <Text as="p" color="secondary" type="supporting">
-                  Keep a test setup, choose attack-data explicitly, and run it against Splunk.
+                  Replay controlled attack-data or validate the original rule against existing Splunk history.
                 </Text>
               </VStack>
             </StackItem>
             <Button
-              isDisabled={!workspace.rule || isCatalogLoading}
+              isDisabled={!workspace.rule
+                || historicalWindowInvalid
+                || (workspace.mode === 'attack_data' && attackDataUnavailable)}
               isLoading={isRunning}
-              label="Run test"
+              label={workspace.mode === 'attack_data' ? 'Run replay test' : 'Search historical data'}
               variant="primary"
               onClick={() => void runTest()}
             />
@@ -292,12 +317,38 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
           ) : null}
           {error ? <Banner isDismissable status="error" title={error} onDismiss={() => setError(null)} /> : null}
 
+          <section className="rule-test-section" aria-labelledby="test-mode-heading">
+            <VStack gap={3}>
+              <VStack gap={1}>
+                <Heading id="test-mode-heading" level={2}>Test mode</Heading>
+                <Text as="p" color="secondary" type="supporting">
+                  Choose whether the run uses controlled replay data or your existing Splunk indexes.
+                </Text>
+              </VStack>
+              <SegmentedControl
+                isDisabled={isRunning}
+                label="Rule test mode"
+                size="sm"
+                value={workspace.mode}
+                onChange={selectMode}
+              >
+                <SegmentedControlItem label="Attack data" value="attack_data" />
+                <SegmentedControlItem label="Historical data" value="historical" />
+              </SegmentedControl>
+              <Text as="p" color="secondary" type="supporting">
+                {workspace.mode === 'attack_data'
+                  ? 'Replays selected files into the configured test index, overrides the base index constraint, and scopes the search to this run host.'
+                  : 'Skips replay and HEC, preserves the original query and index constraints, and searches the selected historical window.'}
+              </Text>
+            </VStack>
+          </section>
+
           <section className="rule-test-section" aria-labelledby="test-setup-heading">
             <VStack gap={4}>
               <VStack gap={1}>
                 <Heading id="test-setup-heading" level={2}>Stored test setup</Heading>
                 <Text as="p" color="secondary" type="supporting">
-                  The rule snapshot, notes, dataset choices, preview, and latest result are saved in this browser.
+                  The mode, rule snapshot, notes, time window, dataset choices, preview, and latest result are saved in this browser.
                 </Text>
               </VStack>
               <HStack align="start" gap={4} wrap="wrap">
@@ -340,70 +391,108 @@ export function RuleTestPage({ rules }: RuleTestPageProps) {
             </VStack>
           </section>
 
-          <section className="rule-test-section" aria-labelledby="dataset-selection-heading">
-            <VStack gap={4}>
-              <VStack gap={1}>
-                <Heading id="dataset-selection-heading" level={2}>Attack-data datasets</Heading>
-                <Text as="p" color="secondary" type="supporting">
-                  Choose concrete files, or leave the selection empty to fall back to MITRE, tags, and log-source mapping.
-                </Text>
+          {workspace.mode === 'historical' ? (
+            <section className="rule-test-section" aria-labelledby="historical-window-heading">
+              <VStack gap={4}>
+                <VStack gap={1}>
+                  <Heading id="historical-window-heading" level={2}>Historical search window</Heading>
+                  <Text as="p" color="secondary" type="supporting">
+                    Use Splunk relative or absolute time values. The original SPL and index filters remain unchanged.
+                  </Text>
+                </VStack>
+                <HStack align="start" gap={4} wrap="wrap">
+                  <StackItem size="fill">
+                    <TextInput
+                      isDisabled={!workspace.rule || isRunning}
+                      isRequired
+                      label="Earliest time"
+                      placeholder="-24h"
+                      value={workspace.earliestTime}
+                      onChange={(earliestTime) => updateWorkspace({ earliestTime })}
+                    />
+                  </StackItem>
+                  <StackItem size="fill">
+                    <TextInput
+                      isDisabled={!workspace.rule || isRunning}
+                      isRequired
+                      label="Latest time"
+                      placeholder="now"
+                      value={workspace.latestTime}
+                      onChange={(latestTime) => updateWorkspace({ latestTime })}
+                    />
+                  </StackItem>
+                </HStack>
               </VStack>
-              <TextInput
-                hasClear
-                isDisabled={!workspace.rule || isCatalogLoading}
-                label="Filter dataset catalog"
-                placeholder="Search a name, MITRE technique, source, or manifest"
-                value={datasetSearch}
-                onChange={setDatasetSearch}
-              />
-              <MultiSelector
-                description={catalog
-                  ? `Showing ${Math.min(matchingDatasets.length, datasetOptionLimit)} of ${matchingDatasets.length} matching datasets; maximum ${catalog.maxDatasets} per test.`
-                  : 'Loading the configured attack_data repository.'}
-                isDisabled={!workspace.rule || visibleDatasets.length === 0 || Boolean(error && !catalog)}
-                isLoading={isCatalogLoading}
-                label="Datasets"
-                options={datasetOptions}
-                placeholder="Use mapping fallback"
-                triggerDisplay="count"
-                value={workspace.selectedDatasetPaths}
-                onChange={selectDatasets}
-              />
-              <Banner
-                status={usesMappingFallback ? 'warning' : 'success'}
-                title={usesMappingFallback
-                  ? 'Mapping fallback is active'
-                  : `${workspace.selectedDatasetPaths.length} explicit dataset(s) selected`}
-                description={usesMappingFallback
-                  ? 'RuleAtlas will rank matching manifests from the rule MITRE techniques, tags, and log source.'
-                  : 'These files will be used directly; rule mapping will not replace the selection.'}
-              />
-              {selectedDatasets.length > 0 ? (
-                <Table
-                  columns={datasetColumns}
-                  data={selectedDatasets}
-                  density="compact"
-                  dividers="rows"
-                  idKey="id"
-                  textOverflow="truncate"
-                />
-              ) : null}
-              <HStack align="center" gap={2} wrap="wrap">
-                <Button
-                  isDisabled={!workspace.rule || isCatalogLoading}
-                  isLoading={isPreviewing}
-                  label={usesMappingFallback ? 'Preview fallback mapping' : 'Preview selected datasets'}
-                  variant="secondary"
-                  onClick={() => void previewDatasets()}
-                />
-                <Text color="secondary" type="supporting">
-                  Previewing does not pull LFS files or send data to Splunk.
-                </Text>
-              </HStack>
-            </VStack>
-          </section>
+            </section>
+          ) : null}
 
-          {workspace.preview ? (
+          {workspace.mode === 'attack_data' ? (
+            <section className="rule-test-section" aria-labelledby="dataset-selection-heading">
+              <VStack gap={4}>
+                <VStack gap={1}>
+                  <Heading id="dataset-selection-heading" level={2}>Attack-data datasets</Heading>
+                  <Text as="p" color="secondary" type="supporting">
+                    Choose concrete files, or leave the selection empty to fall back to MITRE, tags, and log-source mapping.
+                  </Text>
+                </VStack>
+                {catalogError ? <Banner status="error" title={catalogError} /> : null}
+                <TextInput
+                  hasClear
+                  isDisabled={!workspace.rule || attackDataUnavailable}
+                  label="Filter dataset catalog"
+                  placeholder="Search a name, MITRE technique, source, or manifest"
+                  value={datasetSearch}
+                  onChange={setDatasetSearch}
+                />
+                <MultiSelector
+                  description={catalog
+                    ? `Showing ${Math.min(matchingDatasets.length, datasetOptionLimit)} of ${matchingDatasets.length} matching datasets; maximum ${catalog.maxDatasets} per test.`
+                    : 'Loading the configured attack_data repository.'}
+                  isDisabled={!workspace.rule || visibleDatasets.length === 0 || Boolean(catalogError && !catalog)}
+                  isLoading={isCatalogLoading}
+                  label="Datasets"
+                  options={datasetOptions}
+                  placeholder="Use mapping fallback"
+                  triggerDisplay="count"
+                  value={workspace.selectedDatasetPaths}
+                  onChange={selectDatasets}
+                />
+                <Banner
+                  status={usesMappingFallback ? 'warning' : 'success'}
+                  title={usesMappingFallback
+                    ? 'Mapping fallback is active'
+                    : `${workspace.selectedDatasetPaths.length} explicit dataset(s) selected`}
+                  description={usesMappingFallback
+                    ? 'RuleAtlas will rank matching manifests from the rule MITRE techniques, tags, and log source.'
+                    : 'These files will be used directly; rule mapping will not replace the selection.'}
+                />
+                {selectedDatasets.length > 0 ? (
+                  <Table
+                    columns={datasetColumns}
+                    data={selectedDatasets}
+                    density="compact"
+                    dividers="rows"
+                    idKey="id"
+                    textOverflow="truncate"
+                  />
+                ) : null}
+                <HStack align="center" gap={2} wrap="wrap">
+                  <Button
+                    isDisabled={!workspace.rule || attackDataUnavailable}
+                    isLoading={isPreviewing}
+                    label={usesMappingFallback ? 'Preview fallback mapping' : 'Preview selected datasets'}
+                    variant="secondary"
+                    onClick={() => void previewDatasets()}
+                  />
+                  <Text color="secondary" type="supporting">
+                    Previewing does not pull LFS files or send data to Splunk.
+                  </Text>
+                </HStack>
+              </VStack>
+            </section>
+          ) : null}
+
+          {workspace.mode === 'attack_data' && workspace.preview ? (
             <section className="rule-test-section" aria-labelledby="dataset-preview-heading">
               <VStack gap={3}>
                 <VStack gap={1}>

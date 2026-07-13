@@ -3,6 +3,8 @@ import { requestJson } from './api';
 
 const ruleTestApi = '/api/rule-tests';
 
+export type RuleTestMode = 'attack_data' | 'historical';
+
 export interface AttackDatasetFile {
   name: string;
   path: string;
@@ -58,12 +60,18 @@ export interface RuleTestRunResult {
   completedAt: string;
   durationMs: number;
   passed: boolean;
+  mode: RuleTestMode;
+  originalQuery: string;
   query: string;
   queryScoped: boolean;
+  indexOverridden: boolean;
+  testIndex?: string;
+  earliestTime: string;
+  latestTime: string;
   resultCount: number;
   searchAttempts: number;
   pulledAttackData: boolean;
-  selectionMode: 'explicit' | 'mapping';
+  selectionMode?: 'explicit' | 'mapping';
   selectedManifests: AttackDataMatch[];
   ingestedFiles: Array<{
     name: string;
@@ -90,6 +98,7 @@ export interface RuleTestRunStatus {
   runId: string;
   ruleId: string;
   ruleName: string;
+  mode: RuleTestMode;
   state: 'running' | 'completed' | 'failed';
   phase: RuleTestRunPhase;
   startedAt: string;
@@ -125,13 +134,31 @@ export function previewRuleAttackData(
   });
 }
 
+export interface RunRuleTestOptions {
+  mode?: RuleTestMode;
+  selectedDatasetPaths?: string[];
+  runId?: string;
+  earliestTime?: string;
+  latestTime?: string;
+}
+
 export function runRuleTest(
   rule: TemplateRecord,
-  selectedDatasetPaths: string[] = [],
-  runId?: string,
+  selectedDatasetPathsOrOptions: string[] | RunRuleTestOptions = [],
+  legacyRunId?: string,
 ): Promise<RuleTestRunResult> {
+  const options: RunRuleTestOptions = Array.isArray(selectedDatasetPathsOrOptions)
+    ? { selectedDatasetPaths: selectedDatasetPathsOrOptions, runId: legacyRunId }
+    : selectedDatasetPathsOrOptions;
   return requestJson(`${ruleTestApi}/runs`, {
-    body: JSON.stringify({ rule, selectedDatasetPaths, ...(runId ? { runId } : {}) }),
+    body: JSON.stringify({
+      rule,
+      mode: options.mode ?? 'attack_data',
+      selectedDatasetPaths: options.selectedDatasetPaths ?? [],
+      ...(options.runId ? { runId: options.runId } : {}),
+      ...(options.earliestTime ? { earliestTime: options.earliestTime } : {}),
+      ...(options.latestTime ? { latestTime: options.latestTime } : {}),
+    }),
     method: 'POST',
   });
 }

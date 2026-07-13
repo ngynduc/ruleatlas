@@ -9,6 +9,11 @@ import { ApiError } from './http';
 const defaultRequestTimeoutMs = 120_000;
 const searchRetryDelayMs = 1_500;
 const searchRetries = 5;
+const attackDataEarliestTime = '-5m';
+const defaultHistoricalEarliestTime = '-24h';
+const defaultLatestTime = 'now';
+
+export type RuleTestMode = 'attack_data' | 'historical';
 
 export interface RuleTestRunResult {
   runId: string;
@@ -18,12 +23,18 @@ export interface RuleTestRunResult {
   completedAt: string;
   durationMs: number;
   passed: boolean;
+  mode: RuleTestMode;
+  originalQuery: string;
   query: string;
   queryScoped: boolean;
+  indexOverridden: boolean;
+  testIndex?: string;
+  earliestTime: string;
+  latestTime: string;
   resultCount: number;
   searchAttempts: number;
   pulledAttackData: boolean;
-  selectionMode: AttackDataDiscovery['selectionMode'];
+  selectionMode?: AttackDataDiscovery['selectionMode'];
   selectedManifests: AttackDataDiscovery['matches'];
   ingestedFiles: Array<{
     name: string;
@@ -57,9 +68,12 @@ export type SplunkTestProgress =
   | { type: 'search_attempt'; attempt: number; totalAttempts: number; resultCount: number };
 
 interface RunOptions {
-  discovery: AttackDataDiscovery;
-  files: AttackDatasetFile[];
-  pulledAttackData: boolean;
+  mode?: RuleTestMode;
+  discovery?: AttackDataDiscovery;
+  files?: AttackDatasetFile[];
+  pulledAttackData?: boolean;
+  earliestTime?: string;
+  latestTime?: string;
   runId?: string;
   onProgress?: (progress: SplunkTestProgress) => void;
 }
@@ -69,7 +83,8 @@ export async function executeSplunkRuleTest(
   rule: RuleTestInput,
   options: RunOptions,
 ): Promise<RuleTestRunResult> {
-  const credentials = splunkCredentials(config);
+  const mode = options.mode ?? 'attack_data';
+  const credentials = splunkCredentials(config, mode);
   const data = rule.data ?? {};
   const ruleId = stringValue(data.rule_id) || stringValue(rule.id) || 'rule';
   const ruleName = stringValue(data.name) || ruleId;
@@ -84,14 +99,15 @@ export async function executeSplunkRuleTest(
 
   const startedAt = new Date();
   const runId = options.runId ?? `ruleatlas-${slug(ruleId)}-${startedAt.getTime()}`;
+  const files = mode === 'attack_data' ? options.files ?? [] : [];
   const ingestedFiles: RuleTestRunResult['ingestedFiles'] = [];
 
-  for (const [index, file] of options.files.entries()) {
+  for (const [index, file] of files.entries()) {
     const fileStat = await stat(file.localPath);
     options.onProgress?.({
       type: 'ingest_started',
       currentFile: index + 1,
-      totalFiles: options.files.length,
+      totalFiles: files.length,
       file,
       bytes: fileStat.size,
       index: config.splunkIndex,
@@ -107,19 +123,37 @@ export async function executeSplunkRuleTest(
     options.onProgress?.({
       type: 'ingest_accepted',
       currentFile: index + 1,
-      totalFiles: options.files.length,
+      totalFiles: files.length,
       file,
       ...acknowledgement,
     });
   }
 
-  const scoped = scopeSplunkQuery(rawQuery, runId);
-  options.onProgress?.({ type: 'search_started', queryScoped: scoped.scoped, totalAttempts: searchRetries });
-  const search = await searchUntilSettled(config, credentials.apiToken, scoped.query, options.onProgress);
+  const preparedQuery = mode === 'attack_data'
+    ? scopeSplunkQuery(rawQuery, runId, config.splunkIndex)
+    : { query: normalizeSplunkQuery(rawQuery), scoped: false, indexOverridden: false };
+  const earliestTime = mode === 'attack_data'
+    ? attackDataEarliestTime
+    : options.earliestTime?.trim() || defaultHistoricalEarliestTime;
+  const latestTime = mode === 'attack_data'
+    ? defaultLatestTime
+    : options.latestTime?.trim() || defaultLatestTime;
+  const totalAttempts = mode === 'attack_data' ? searchRetries : 1;
+  options.onProgress?.({
+    type: 'search_started',
+    queryScoped: preparedQuery.scoped,
+    totalAttempts,
+  });
+  const search = await searchUntilSettled(config, credentials.apiToken, preparedQuery.query, {
+    earliestTime,
+    latestTime,
+    totalAttempts,
+    onProgress: options.onProgress,
+  });
   const completedAt = new Date();
-  const warnings = [...options.discovery.warnings];
-  if (!scoped.scoped) {
-    warnings.push('Query starts with a generating command, so RuleAtlas could not add the per-run host filter. The search is limited to the recent test window.');
+  const warnings = mode === 'attack_data' ? [...(options.discovery?.warnings ?? [])] : [];
+  if (mode === 'attack_data' && !preparedQuery.scoped) {
+    warnings.push('Query starts with a generating command, so RuleAtlas could not override the test index or add the per-run host filter. The search is limited to the recent test window.');
   }
 
   return {
@@ -130,33 +164,72 @@ export async function executeSplunkRuleTest(
     completedAt: completedAt.toISOString(),
     durationMs: completedAt.getTime() - startedAt.getTime(),
     passed: search.resultCount > 0,
-    query: scoped.query,
-    queryScoped: scoped.scoped,
+    mode,
+    originalQuery: rawQuery,
+    query: preparedQuery.query,
+    queryScoped: preparedQuery.scoped,
+    indexOverridden: preparedQuery.indexOverridden,
+    ...(mode === 'attack_data' ? { testIndex: config.splunkIndex } : {}),
+    earliestTime,
+    latestTime,
     resultCount: search.resultCount,
     searchAttempts: search.attempts,
-    pulledAttackData: options.pulledAttackData,
-    selectionMode: options.discovery.selectionMode,
-    selectedManifests: options.discovery.matches,
+    pulledAttackData: mode === 'attack_data' && Boolean(options.pulledAttackData),
+    ...(mode === 'attack_data' && options.discovery
+      ? { selectionMode: options.discovery.selectionMode }
+      : {}),
+    selectedManifests: mode === 'attack_data' ? options.discovery?.matches ?? [] : [],
     ingestedFiles,
     warnings,
   };
 }
 
-export function assertSplunkTestConfigured(config: RuleRepoConfig): void {
-  splunkCredentials(config);
+export function assertSplunkTestConfigured(
+  config: RuleRepoConfig,
+  mode: RuleTestMode = 'attack_data',
+): void {
+  splunkCredentials(config, mode);
 }
 
-export function scopeSplunkQuery(query: string, runHost: string): { query: string; scoped: boolean } {
-  const trimmed = query.trim();
-  const searchQuery = /^search\s+/i.test(trimmed) ? trimmed : trimmed.startsWith('|') ? trimmed : `search ${trimmed}`;
+export function scopeSplunkQuery(
+  query: string,
+  runHost: string,
+  testIndex?: string,
+): { query: string; scoped: boolean; indexOverridden: boolean } {
+  const searchQuery = normalizeSplunkQuery(query);
   if (searchQuery.startsWith('|')) {
-    return { query: searchQuery, scoped: false };
+    return { query: searchQuery, scoped: false, indexOverridden: false };
   }
 
   const pipeIndex = searchQuery.indexOf('|');
-  const head = pipeIndex >= 0 ? searchQuery.slice(0, pipeIndex).trimEnd() : searchQuery;
+  const originalHead = pipeIndex >= 0 ? searchQuery.slice(0, pipeIndex).trimEnd() : searchQuery;
   const tail = pipeIndex >= 0 ? ` ${searchQuery.slice(pipeIndex).trimStart()}` : '';
-  return { query: `${head} host="${escapeSplunkString(runHost)}"${tail}`, scoped: true };
+  const head = testIndex ? overrideBaseSearchIndex(originalHead, testIndex) : originalHead;
+  return {
+    query: `${head} host="${escapeSplunkString(runHost)}"${tail}`,
+    scoped: true,
+    indexOverridden: Boolean(testIndex),
+  };
+}
+
+function normalizeSplunkQuery(query: string): string {
+  const trimmed = query.trim();
+  return /^search\s+/i.test(trimmed) || trimmed.startsWith('|') ? trimmed : `search ${trimmed}`;
+}
+
+function overrideBaseSearchIndex(searchHead: string, testIndex: string): string {
+  const replacement = `index="${escapeSplunkString(testIndex)}"`;
+  let replacements = 0;
+  const replaceIndex = () => {
+    replacements += 1;
+    return replacement;
+  };
+  const withoutIndexLists = searchHead.replace(/\bindex\s+IN\s*\([^)]*\)/gi, replaceIndex);
+  const overridden = withoutIndexLists.replace(
+    /\bindex\s*=\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s|()]+)/gi,
+    replaceIndex,
+  );
+  return replacements > 0 ? overridden : `${overridden} ${replacement}`;
 }
 
 export function parseSplunkExportResults(body: string): number {
@@ -224,20 +297,31 @@ async function searchUntilSettled(
   config: RuleRepoConfig,
   apiToken: string,
   query: string,
-  onProgress?: (progress: SplunkTestProgress) => void,
+  options: {
+    earliestTime: string;
+    latestTime: string;
+    totalAttempts: number;
+    onProgress?: (progress: SplunkTestProgress) => void;
+  },
 ) {
   let resultCount = 0;
   let attempts = 0;
-  for (let attempt = 1; attempt <= searchRetries; attempt += 1) {
+  for (let attempt = 1; attempt <= options.totalAttempts; attempt += 1) {
     attempts = attempt;
     if (attempt > 1) {
       await delay(searchRetryDelayMs);
     }
-    resultCount = await runSplunkSearch(config, apiToken, query);
-    onProgress?.({
+    resultCount = await runSplunkSearch(
+      config,
+      apiToken,
+      query,
+      options.earliestTime,
+      options.latestTime,
+    );
+    options.onProgress?.({
       type: 'search_attempt',
       attempt,
-      totalAttempts: searchRetries,
+      totalAttempts: options.totalAttempts,
       resultCount,
     });
     if (resultCount > 0) {
@@ -247,11 +331,17 @@ async function searchUntilSettled(
   return { attempts, resultCount };
 }
 
-async function runSplunkSearch(config: RuleRepoConfig, apiToken: string, query: string): Promise<number> {
+async function runSplunkSearch(
+  config: RuleRepoConfig,
+  apiToken: string,
+  query: string,
+  earliestTime: string,
+  latestTime: string,
+): Promise<number> {
   const url = serviceUrl(config.splunkApiUrl, '/services/search/jobs/export');
   const body = new URLSearchParams({
-    earliest_time: '-5m',
-    latest_time: 'now',
+    earliest_time: earliestTime,
+    latest_time: latestTime,
     output_mode: 'json',
     search: query,
   }).toString();
@@ -274,18 +364,20 @@ async function runSplunkSearch(config: RuleRepoConfig, apiToken: string, query: 
   return parseSplunkExportResults(response.body);
 }
 
-function splunkCredentials(config: RuleRepoConfig) {
+function splunkCredentials(config: RuleRepoConfig, mode: RuleTestMode = 'attack_data') {
   const hecToken = process.env.SPLUNK_HEC_TOKEN?.trim();
   const apiToken = (process.env.SPLUNK_API_TOKEN || process.env.SPLUNK_TOKEN)?.trim();
   const missing: string[] = [];
-  if (!config.splunkHecUrl) missing.push('Splunk HEC URL');
   if (!config.splunkApiUrl) missing.push('Splunk API URL');
-  if (!hecToken) missing.push('SPLUNK_HEC_TOKEN');
   if (!apiToken) missing.push('SPLUNK_API_TOKEN');
+  if (mode === 'attack_data') {
+    if (!config.splunkHecUrl) missing.push('Splunk HEC URL');
+    if (!hecToken) missing.push('SPLUNK_HEC_TOKEN');
+  }
   if (missing.length > 0) {
     throw new ApiError(412, 'splunk_not_configured', `Splunk test engine is missing: ${missing.join(', ')}.`, { missing });
   }
-  return { apiToken: apiToken as string, hecToken: hecToken as string };
+  return { apiToken: apiToken as string, hecToken: hecToken ?? '' };
 }
 
 interface RequestTextOptions {

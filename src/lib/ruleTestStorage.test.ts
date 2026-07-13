@@ -17,6 +17,9 @@ describe('rule-test workspace storage', () => {
     });
 
     expect(state.version).toBe(1);
+    expect(state.mode).toBe('attack_data');
+    expect(state.earliestTime).toBe('-24h');
+    expect(state.latestTime).toBe('now');
     expect(state.testName).toBe('Credential test');
     expect(state.notes).toBe('Expected one result');
     expect(state.selectedDatasetPaths).toEqual(['/datasets/a.log']);
@@ -60,7 +63,10 @@ describe('rule-test workspace storage', () => {
       }],
     };
 
-    expect(normalizeRuleTestWorkspace({ runStatus }).runStatus).toEqual(runStatus);
+    expect(normalizeRuleTestWorkspace({ runStatus }).runStatus).toEqual({
+      ...runStatus,
+      mode: 'attack_data',
+    });
   });
 
   it('round-trips the current test setup through browser-style storage', () => {
@@ -73,6 +79,9 @@ describe('rule-test workspace storage', () => {
     };
     const state = {
       ...emptyRuleTestWorkspace(),
+      mode: 'historical' as const,
+      earliestTime: '-30d',
+      latestTime: '-1d',
       testName: 'Stored test',
       notes: 'Keep this context',
       selectedDatasetPaths: ['/datasets/selected.log'],

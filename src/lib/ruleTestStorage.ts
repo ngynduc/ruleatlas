@@ -1,10 +1,16 @@
 import type { TemplateRecord } from '../types';
 import type { AttackDataPreview, RuleTestRunResult, RuleTestRunStatus } from './ruleTestApi';
+import type { RuleTestMode } from './ruleTestApi';
 
 const storageKey = 'ruleatlas.rule-test.v1';
+const defaultEarliestTime = '-24h';
+const defaultLatestTime = 'now';
 
 export interface RuleTestWorkspaceState {
   version: 1;
+  mode: RuleTestMode;
+  earliestTime: string;
+  latestTime: string;
   testName: string;
   notes: string;
   rule: TemplateRecord | null;
@@ -18,6 +24,9 @@ export interface RuleTestWorkspaceState {
 export function emptyRuleTestWorkspace(): RuleTestWorkspaceState {
   return {
     version: 1,
+    mode: 'attack_data',
+    earliestTime: defaultEarliestTime,
+    latestTime: defaultLatestTime,
     testName: '',
     notes: '',
     rule: null,
@@ -58,13 +67,16 @@ export function normalizeRuleTestWorkspace(value: unknown): RuleTestWorkspaceSta
 
   return {
     version: 1,
+    mode: ruleTestMode(value.mode),
+    earliestTime: stringValue(value.earliestTime) || defaultEarliestTime,
+    latestTime: stringValue(value.latestTime) || defaultLatestTime,
     testName: stringValue(value.testName),
     notes: stringValue(value.notes),
     rule: isTemplateRecord(value.rule) ? value.rule : null,
     selectedDatasetPaths: uniqueStrings(value.selectedDatasetPaths),
     preview: isAttackDataPreview(value.preview) ? value.preview : null,
-    result: isRuleTestRunResult(value.result) ? value.result : null,
-    runStatus: isRuleTestRunStatus(value.runStatus) ? value.runStatus : null,
+    result: normalizeRuleTestRunResult(value.result),
+    runStatus: normalizeRuleTestRunStatus(value.runStatus),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : null,
   };
 }
@@ -97,15 +109,33 @@ function isAttackDataPreview(value: unknown): value is AttackDataPreview {
 }
 
 function isRuleTestRunResult(value: unknown): value is RuleTestRunResult {
+  const mode = isObject(value) ? ruleTestMode(value.mode) : 'attack_data';
   return isObject(value)
     && typeof value.runId === 'string'
     && typeof value.passed === 'boolean'
     && typeof value.resultCount === 'number'
     && typeof value.durationMs === 'number'
-    && (value.selectionMode === 'explicit' || value.selectionMode === 'mapping')
+    && (mode === 'historical' || value.selectionMode === 'explicit' || value.selectionMode === 'mapping')
     && Array.isArray(value.ingestedFiles)
     && Array.isArray(value.selectedManifests)
     && Array.isArray(value.warnings);
+}
+
+function normalizeRuleTestRunResult(value: unknown): RuleTestRunResult | null {
+  if (!isRuleTestRunResult(value)) {
+    return null;
+  }
+  const mode = ruleTestMode(value.mode);
+  return {
+    ...value,
+    mode,
+    originalQuery: stringValue(value.originalQuery) || stringValue(value.query),
+    indexOverridden: typeof value.indexOverridden === 'boolean'
+      ? value.indexOverridden
+      : mode === 'attack_data',
+    earliestTime: stringValue(value.earliestTime) || (mode === 'attack_data' ? '-5m' : defaultEarliestTime),
+    latestTime: stringValue(value.latestTime) || defaultLatestTime,
+  };
 }
 
 function isRuleTestRunStatus(value: unknown): value is RuleTestRunStatus {
@@ -124,6 +154,20 @@ function isRuleTestRunStatus(value: unknown): value is RuleTestRunStatus {
     && typeof value.searchAttempts === 'number'
     && typeof value.resultCount === 'number'
     && Array.isArray(value.events);
+}
+
+function normalizeRuleTestRunStatus(value: unknown): RuleTestRunStatus | null {
+  if (!isRuleTestRunStatus(value)) {
+    return null;
+  }
+  return {
+    ...value,
+    mode: ruleTestMode(value.mode),
+  };
+}
+
+function ruleTestMode(value: unknown): RuleTestMode {
+  return value === 'historical' ? 'historical' : 'attack_data';
 }
 
 function stringValue(value: unknown): string {

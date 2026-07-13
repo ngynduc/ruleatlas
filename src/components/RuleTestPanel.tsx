@@ -35,6 +35,12 @@ export function RuleTestPanel({ isTesting, error, result, onDismiss }: RuleTestP
       renderCell: (match) => <Text hasTabularNumbers type="supporting">{match.datasets.length}</Text>,
     },
   ];
+  const isHistorical = result?.mode === 'historical';
+  const resultDescription = result
+    ? isHistorical
+      ? `Original query searched ${result.earliestTime} to ${result.latestTime} in ${(result.durationMs / 1000).toFixed(1)}s; no data was ingested.`
+      : `${result.ingestedFiles.length} file(s) ingested from ${result.selectedManifests.length} manifest(s) using ${result.selectionMode === 'explicit' ? 'explicit selection' : 'mapping fallback'} in ${(result.durationMs / 1000).toFixed(1)}s. ${result.indexOverridden ? `The base index was forced to ${result.testIndex ?? 'the configured test index'}.` : 'The generating query could not be scoped to the test index or run host.'}`
+    : '';
 
   return (
     <section className="rule-test-panel" aria-label="Latest Splunk rule test">
@@ -47,23 +53,29 @@ export function RuleTestPanel({ isTesting, error, result, onDismiss }: RuleTestP
           <>
             <Banner
               isDismissable
-              status={result.passed ? 'success' : 'error'}
+              status={result.passed ? 'success' : 'warning'}
               title={result.passed ? `Rule matched ${result.resultCount} result(s)` : 'Rule returned no results'}
-              description={`${result.ingestedFiles.length} file(s) ingested from ${result.selectedManifests.length} manifest(s) using ${result.selectionMode === 'explicit' ? 'explicit selection' : 'mapping fallback'} in ${(result.durationMs / 1000).toFixed(1)}s.`}
+              description={resultDescription}
               onDismiss={onDismiss}
             />
             <HStack align="center" gap={2}>
-              <StackItem size="fill"><Heading level={2}>Selected attack-data</Heading></StackItem>
+              <StackItem size="fill">
+                <Heading level={2}>{isHistorical ? 'Historical query' : 'Selected attack-data'}</Heading>
+              </StackItem>
               <Text color="secondary" type="supporting">Run {result.runId}</Text>
             </HStack>
-            <Table
-              columns={columns}
-              data={result.selectedManifests}
-              density="compact"
-              dividers="rows"
-              idKey="id"
-              textOverflow="truncate"
-            />
+            {isHistorical ? (
+              <Text as="p" color="secondary" type="supporting">{result.query}</Text>
+            ) : (
+              <Table
+                columns={columns}
+                data={result.selectedManifests}
+                density="compact"
+                dividers="rows"
+                idKey="id"
+                textOverflow="truncate"
+              />
+            )}
           </>
         ) : null}
       </VStack>

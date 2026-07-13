@@ -65,7 +65,7 @@ gh auth login
 
 The token is read by the local Vite server. It is not stored in `ruleatlas.config.json` or returned to the browser.
 
-## Splunk Attack-data Rule Tests
+## Splunk Rule Tests
 
 RuleAtlas scans the local [Splunk attack_data](https://github.com/splunk/attack_data) manifests. For rules with a MITRE technique, it selects exact or parent/sub-technique matches and uses rule tags/log source to rank them. If a rule has no MITRE technique, tags and log source provide the fallback match. The configured dataset cap prevents accidental multi-gigabyte pulls.
 
@@ -76,7 +76,7 @@ git lfs install --skip-smudge
 git clone https://github.com/splunk/attack_data ../../DetectionEngineering/attack_data
 ```
 
-Configure Splunk credentials in the Vite server environment:
+Configure Splunk credentials in the Vite server environment. Historical tests need the API URL and token; attack-data replay also needs the HEC URL and token:
 
 ```bash
 export SPLUNK_HEC_TOKEN=your-hec-token
@@ -87,14 +87,17 @@ export SPLUNK_INDEX=attack_data
 npm run dev -- --host 127.0.0.1
 ```
 
-Open **Rule testing** from the Utilities navigation, choose a saved Splunk rule, and optionally choose concrete datasets from the configured `attack_data` repository. RuleAtlas stores the rule snapshot, test name, notes, dataset choices, preview, and latest result in browser storage.
+Open **Rule testing** from the Utilities navigation, choose a saved Splunk rule, then choose a mode. RuleAtlas stores the mode, rule snapshot, test name, notes, historical window, dataset choices, preview, and latest result in browser storage.
 
-When a test runs, RuleAtlas:
+- **Attack data** selects or maps replay files, pulls only those Git LFS objects, sends them to the configured test index, and searches the last five minutes. RuleAtlas replaces a base `index=...` or `index IN (...)` constraint with `SPLUNK_INDEX` (default `attack_data`) and adds the unique run host. SPL that starts with a generating command cannot be rewritten and produces a warning.
+- **Historical data** skips attack-data discovery, Git LFS, and HEC. It runs the original rule query and index constraints once against existing Splunk data. Set the Splunk earliest/latest values in the workspace; the default window is `-24h` to `now`.
+
+When an attack-data test runs, RuleAtlas:
 
 1. Uses the explicitly selected datasets, or falls back to MITRE/tag/log-source mapping when the selection is empty.
 2. Pulls only the selected Git LFS files and shows the exact selective fetch target and outcome.
 3. Sends those files to Splunk HEC with a unique run host and records each HEC response.
-4. Runs the rule query through the Splunk search export API.
+4. Overrides the base search index with the configured test index and runs the scoped query through the Splunk search export API.
 5. Stores the live fetch/ingest/search activity, pass/fail result, and selected manifests on the Rule testing page.
 
 The replay status treats HEC acceptance and detection matches as separate checkpoints. A successful HEC response confirms that Splunk accepted the collector request; the following search attempts show whether the replayed events became searchable and matched the rule.
