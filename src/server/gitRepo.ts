@@ -131,7 +131,7 @@ export async function getGitRepositoryStatus(config: RuleRepoConfig): Promise<Gi
 
   const [branchResult, headResult, remoteUrlResult, trackingResult, statusResult] = await Promise.all([
     runGit(config.repoPath, ['branch', '--show-current']),
-    runGit(config.repoPath, ['rev-parse', '--short', 'HEAD']),
+    runGit(config.repoPath, ['rev-parse', '--short', '--verify', '--quiet', 'HEAD'], [0, 1]),
     runGit(config.repoPath, ['remote', 'get-url', config.githubRemote], [0, 2]),
     runGit(config.repoPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], [0, 128]),
     runGit(config.repoPath, ['status', '--porcelain=v1', '--untracked-files=all']),

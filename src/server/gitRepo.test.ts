@@ -46,6 +46,22 @@ describe('Git repository service', () => {
     expect(status.github).toEqual({ owner: 'splunk', repository: 'attack_data' });
   });
 
+  it('reports an initialized repository before its first commit', async () => {
+    const repository = await mkdtemp(path.join(tmpdir(), 'ruleatlas-git-unborn-'));
+    temporaryDirectories.push(repository);
+    await git(repository, ['init', '-b', 'main']);
+
+    const status = await getGitRepositoryStatus(configFor(repository));
+
+    expect(status).toMatchObject({
+      branch: 'main',
+      clean: true,
+      head: '',
+      isGitRepository: true,
+      trackingBranch: null,
+    });
+  });
+
   it.each([
     'https://github.com/splunk/attack_data.git',
     'git@github.com:splunk/attack_data.git',
