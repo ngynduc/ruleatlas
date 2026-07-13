@@ -35,6 +35,7 @@ import type {
   RuleTestMode,
   RuleTestRunStatus,
 } from '../lib/ruleTestApi';
+import { createRunId } from '../lib/ruleTestRunId';
 import {
   loadRuleTestWorkspace,
   saveRuleTestWorkspace,
@@ -562,10 +563,6 @@ function ruleLabel(rule: TemplateRecord): string {
 
 function displayValue(value: unknown): string {
   return Array.isArray(value) ? value.map(String).join(', ') : typeof value === 'string' ? value : '';
-}
-
-function createRunId(): string {
-  return `ruleatlas-ui-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 async function pollRuleTestRunStatus(
