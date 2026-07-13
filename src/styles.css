@@ -153,7 +153,7 @@ textarea {
 }
 
 .config-form {
-  max-width: 760px;
+  max-width: 880px;
   padding: var(--spacing-4);
 }
 
@@ -163,6 +163,49 @@ textarea {
   background: var(--color-background-surface);
   padding: var(--spacing-4);
   overflow-wrap: anywhere;
+}
+
+.repository-section,
+.rule-test-section,
+.rule-test-panel {
+  width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  padding: var(--spacing-4);
+  overflow: hidden;
+}
+
+.repository-section .astryx-base-table,
+.rule-test-panel .astryx-base-table {
+  width: 100%;
+}
+
+.rule-test-panel {
+  margin: var(--spacing-3) var(--spacing-4) 0;
+  width: calc(100% - (2 * var(--spacing-4)));
+}
+
+.rule-test-workspace {
+  min-width: 0;
+}
+
+.rule-test-workspace .rule-test-panel {
+  margin: 0;
+  width: 100%;
+}
+
+.rule-test-section .astryx-base-table {
+  width: 100%;
+}
+
+.rule-test-status-panel .astryx-list {
+  width: 100%;
+}
+
+.rule-test-event-detail {
+  overflow-wrap: anywhere;
+  font-family: var(--font-family-code);
 }
 
 @media (max-width: 900px) {

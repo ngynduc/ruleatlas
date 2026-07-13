@@ -8,12 +8,24 @@ const repoConfigApi = '/api/rule-repo/config';
 export interface RuleRepoConfigPayload {
   path: string;
   contentRoot: string;
+  githubRemote: string;
+  githubBaseBranch: string;
+  attackDataPath: string;
+  attackDataMaxDatasets: number;
+  splunkHecUrl: string;
+  splunkApiUrl: string;
+  splunkIndex: string;
+  splunkVerifyTls: boolean;
 }
 
 export interface RuleRepoConfigResult extends RuleRepoConfigPayload {
   targetRepo: string;
   contentRootPath: string;
   configPath: string;
+  resolvedAttackDataPath: string;
+  githubAuthAvailable: boolean;
+  splunkHecTokenAvailable: boolean;
+  splunkApiTokenAvailable: boolean;
 }
 
 export interface RepoStoreLoadResult {

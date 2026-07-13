@@ -38,6 +38,18 @@ export function AppShell({ activeTemplateId, onNavigate }: AppShellProps) {
       </SideNavSection>
       <SideNavSection title="Utilities">
         <SideNavItem
+          href="/templates/tests"
+          isSelected={activeTemplateId === 'tests'}
+          label="Rule testing"
+          onClick={navigate('/templates/tests')}
+        />
+        <SideNavItem
+          href="/templates/repository"
+          isSelected={activeTemplateId === 'repository'}
+          label="Repository"
+          onClick={navigate('/templates/repository')}
+        />
+        <SideNavItem
           href="/templates/import-export"
           isSelected={activeTemplateId === 'import-export'}
           label="Import / Export"

@@ -216,6 +216,12 @@ tempCodeRunnerFile.py
 node_modules/
 ruleatlas.config.json
 
+# Local runtime and test exports
+data/state_store.db/
+data/stream_store/
+data/test_rule.json
+data/test_rule.extracted.yaml
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

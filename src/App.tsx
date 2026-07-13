@@ -16,6 +16,8 @@ import { AppShell } from './components/AppShell';
 import { ConfigPage } from './components/ConfigPage';
 import { ImportExportPage } from './components/ImportExportPage';
 import { JsonModal } from './components/JsonModal';
+import { RepositoryPage } from './components/RepositoryPage';
+import { RuleTestPage } from './components/RuleTestPage';
 import { TemplateWorkspace } from './components/TemplateWorkspace';
 import { getTemplate } from './data/templates';
 import {
@@ -40,6 +42,7 @@ export function App() {
     status: 'loading',
     message: 'Loading repo store...',
   });
+  const [syncBannerVisible, setSyncBannerVisible] = useState(true);
   const [activeTemplateId, setActiveTemplateId] = useState(() => routeToTemplateId(window.location.pathname));
   const [preview, setPreview] = useState<JsonPreview | null>(null);
   const saveVersion = useRef(0);
@@ -133,6 +136,16 @@ export function App() {
   }, [repoReady, store]);
 
   useEffect(() => {
+    setSyncBannerVisible(true);
+    if (syncState.status !== 'saved') {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setSyncBannerVisible(false), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [syncState]);
+
+  useEffect(() => {
     const handlePopState = () => setActiveTemplateId(routeToTemplateId(window.location.pathname));
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -182,12 +195,14 @@ export function App() {
                     </Text>
                   </VStack>
                 </StackItem>
-                <div className="sync-banner-wrap">
-                  <Banner
-                    status={syncState.status === 'error' ? 'error' : syncState.status === 'saved' ? 'success' : 'warning'}
-                    title={syncState.message}
-                  />
-                </div>
+                {syncBannerVisible ? (
+                  <section className="sync-banner-wrap" aria-live="polite">
+                    <Banner
+                      status={syncState.status === 'error' ? 'error' : syncState.status === 'saved' ? 'success' : 'warning'}
+                      title={syncState.message}
+                    />
+                  </section>
+                ) : null}
               </HStack>
             </LayoutHeader>
           }
@@ -195,6 +210,10 @@ export function App() {
           <LayoutContent label="RuleAtlas workspace">
             {activeTemplateId === 'config' ? (
               <ConfigPage onSaved={() => void loadRepoData()} />
+            ) : activeTemplateId === 'repository' ? (
+              <RepositoryPage />
+            ) : activeTemplateId === 'tests' ? (
+              <RuleTestPage rules={getTemplateRecords(store, 'rules')} />
             ) : activeTemplateId === 'import-export' ? (
               <ImportExportPage
                 store={store}

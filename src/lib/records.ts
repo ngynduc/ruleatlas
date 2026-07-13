@@ -26,6 +26,12 @@ export function routeToTemplateId(pathname: string): string {
   if (leaf === 'config') {
     return 'config';
   }
+  if (leaf === 'repository') {
+    return 'repository';
+  }
+  if (leaf === 'tests') {
+    return 'tests';
+  }
   if (leaf && legacyRuleTemplateIds.includes(leaf)) {
     return defaultTemplateId;
   }

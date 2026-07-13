@@ -2,5 +2,19 @@
   "ruleRepo": {
     "path": "../detection-rules",
     "contentRoot": "contents"
+  },
+  "github": {
+    "remote": "origin",
+    "baseBranch": "main"
+  },
+  "attackData": {
+    "path": "../../DetectionEngineering/attack_data",
+    "maxDatasets": 5
+  },
+  "splunk": {
+    "hecUrl": "https://splunk.local:8088",
+    "apiUrl": "https://splunk.local:8089",
+    "index": "attack_data",
+    "verifyTls": true
   }
 }

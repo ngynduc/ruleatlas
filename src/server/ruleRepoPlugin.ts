@@ -4,6 +4,9 @@ import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
+import { handleGitRepositoryApi, validateGitBranchName, validateGitRemoteName } from './gitRepo';
+import { handleRuleTestApi } from './ruleTestApi';
+import { assertLocalApiRequest, sendApiError } from './http';
 
 interface StoredRecord {
   id?: unknown;
@@ -27,6 +30,20 @@ interface RuleAtlasConfigFile {
     repoPath?: unknown;
     contentRoot?: unknown;
   };
+  github?: {
+    remote?: unknown;
+    baseBranch?: unknown;
+  };
+  attackData?: {
+    path?: unknown;
+    maxDatasets?: unknown;
+  };
+  splunk?: {
+    hecUrl?: unknown;
+    apiUrl?: unknown;
+    index?: unknown;
+    verifyTls?: unknown;
+  };
 }
 
 export interface RuleRepoPluginOptions {
@@ -35,16 +52,30 @@ export interface RuleRepoPluginOptions {
   configPath?: string;
 }
 
-interface RuleRepoConfig {
+export interface RuleRepoConfig {
   configPath: string;
   repoPathInput: string;
   repoPath: string;
   contentRoot: string;
   contentRootPath: string;
+  githubRemote: string;
+  githubBaseBranch: string;
+  attackDataPathInput: string;
+  attackDataPath: string;
+  attackDataMaxDatasets: number;
+  splunkHecUrl: string;
+  splunkApiUrl: string;
+  splunkIndex: string;
+  splunkVerifyTls: boolean;
 }
 
 const defaultRuleRepo = '../detection-rules';
 const defaultContentRoot = 'contents';
+const defaultAttackDataRepo = '../../DetectionEngineering/attack_data';
+const defaultMaxDatasets = 5;
+const defaultGitHubRemote = 'origin';
+const defaultGitHubBaseBranch = 'main';
+const defaultSplunkIndex = 'attack_data';
 const localConfigFileName = 'ruleatlas.config.json';
 const storeFileName = 'ruleatlas-store.json';
 const templateFolders: Record<string, string> = {
@@ -65,6 +96,15 @@ export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
     name: 'ruleatlas-rule-repo',
     configureServer(server) {
       let repoConfig = resolveRuleRepoConfig(server.config.root, options);
+
+      server.middlewares.use('/api', (request, response, next) => {
+        try {
+          assertLocalApiRequest(request);
+          next();
+        } catch (error) {
+          sendApiError(response, error);
+        }
+      });
 
       server.middlewares.use('/api/rule-repo/config', async (request, response) => {
         try {
@@ -104,6 +144,14 @@ export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
           sendJson(response, 500, { error: message });
         }
       });
+
+      server.middlewares.use('/api/rule-repo/git', (request, response) =>
+        void handleGitRepositoryApi(request, response, repoConfig),
+      );
+
+      server.middlewares.use('/api/rule-tests', (request, response) =>
+        void handleRuleTestApi(request, response, repoConfig),
+      );
     },
   };
 }
@@ -126,6 +174,23 @@ async function handleConfigPut(
   const contentRoot = normalizeContentRoot(firstString(payload.contentRoot, defaultContentRoot));
   const configPath = resolveRuleAtlasConfigPath(projectRoot, options.configPath);
   const currentConfig = readRuleAtlasConfig(projectRoot, options.configPath);
+  const attackDataPath = firstString(payload.attackDataPath, currentConfig.attackData?.path, defaultAttackDataRepo);
+  const attackDataMaxDatasets = boundedInteger(
+    payload.attackDataMaxDatasets,
+    boundedInteger(currentConfig.attackData?.maxDatasets, defaultMaxDatasets, 1, 20),
+    1,
+    20,
+  );
+  const githubRemote = validateGitRemoteName(
+    firstString(payload.githubRemote, currentConfig.github?.remote, defaultGitHubRemote),
+  );
+  const githubBaseBranch = validateGitBranchName(
+    firstString(payload.githubBaseBranch, currentConfig.github?.baseBranch, defaultGitHubBaseBranch),
+  );
+  const splunkHecUrl = optionalString(payload.splunkHecUrl, currentConfig.splunk?.hecUrl);
+  const splunkApiUrl = optionalString(payload.splunkApiUrl, currentConfig.splunk?.apiUrl);
+  const splunkIndex = firstString(payload.splunkIndex, currentConfig.splunk?.index, defaultSplunkIndex);
+  const splunkVerifyTls = booleanValue(payload.splunkVerifyTls, booleanValue(currentConfig.splunk?.verifyTls, true));
   const nextConfig: RuleAtlasConfigFile = {
     ...currentConfig,
     ruleRepo: {
@@ -133,10 +198,27 @@ async function handleConfigPut(
       path: repoPathInput,
       contentRoot: contentRoot || '.',
     },
+    github: {
+      ...currentConfig.github,
+      remote: githubRemote,
+      baseBranch: githubBaseBranch,
+    },
+    attackData: {
+      ...currentConfig.attackData,
+      path: attackDataPath,
+      maxDatasets: attackDataMaxDatasets,
+    },
+    splunk: {
+      ...currentConfig.splunk,
+      hecUrl: splunkHecUrl,
+      apiUrl: splunkApiUrl,
+      index: splunkIndex,
+      verifyTls: splunkVerifyTls,
+    },
   };
 
   await writeJson(configPath, nextConfig);
-  return ruleRepoConfigFromValues(projectRoot, repoPathInput, contentRoot, configPath);
+  return resolveRuleRepoConfig(projectRoot, options);
 }
 
 async function handleGet(response: ServerResponse, repoConfig: RuleRepoConfig) {
@@ -381,11 +463,50 @@ function resolveRuleRepoConfig(projectRoot: string, options: RuleRepoPluginOptio
       defaultContentRoot,
     ),
   );
+  const attackDataPathInput = firstString(
+    process.env.RULEATLAS_ATTACK_DATA_REPO,
+    config.attackData?.path,
+    defaultAttackDataRepo,
+  );
+  const splunkHost = firstString(process.env.SPLUNK_HOST);
+  const splunkHecUrl = firstString(
+    process.env.SPLUNK_HEC_URL,
+    config.splunk?.hecUrl,
+    splunkHost ? `https://${splunkHost}:8088` : '',
+  );
+  const splunkApiUrl = firstString(
+    process.env.SPLUNK_API_URL,
+    config.splunk?.apiUrl,
+    splunkHost ? `https://${splunkHost}:8089` : '',
+  );
   return ruleRepoConfigFromValues(
     projectRoot,
     repoPathInput,
     contentRoot,
     resolveRuleAtlasConfigPath(projectRoot, options.configPath),
+    {
+      attackDataPathInput,
+      attackDataMaxDatasets: boundedInteger(
+        process.env.RULEATLAS_ATTACK_DATA_MAX_DATASETS,
+        boundedInteger(config.attackData?.maxDatasets, defaultMaxDatasets, 1, 20),
+        1,
+        20,
+      ),
+      githubRemote: validateGitRemoteName(
+        firstString(process.env.RULEATLAS_GITHUB_REMOTE, config.github?.remote, defaultGitHubRemote),
+      ),
+      githubBaseBranch: validateGitBranchName(
+        firstString(
+          process.env.RULEATLAS_GITHUB_BASE_BRANCH,
+          config.github?.baseBranch,
+          defaultGitHubBaseBranch,
+        ),
+      ),
+      splunkHecUrl,
+      splunkApiUrl,
+      splunkIndex: firstString(process.env.SPLUNK_INDEX, config.splunk?.index, defaultSplunkIndex),
+      splunkVerifyTls: booleanValue(process.env.SPLUNK_VERIFY_TLS, booleanValue(config.splunk?.verifyTls, true)),
+    },
   );
 }
 
@@ -394,14 +515,28 @@ function ruleRepoConfigFromValues(
   repoPathInput: string,
   contentRoot: string,
   configPath: string,
+  services: Pick<
+    RuleRepoConfig,
+    | 'attackDataPathInput'
+    | 'attackDataMaxDatasets'
+    | 'githubRemote'
+    | 'githubBaseBranch'
+    | 'splunkHecUrl'
+    | 'splunkApiUrl'
+    | 'splunkIndex'
+    | 'splunkVerifyTls'
+  >,
 ): RuleRepoConfig {
   const resolvedRepoPath = path.resolve(projectRoot, repoPathInput);
+  const attackDataPath = path.resolve(projectRoot, services.attackDataPathInput);
   return {
     configPath,
     repoPathInput,
     repoPath: resolvedRepoPath,
     contentRoot,
     contentRootPath: contentRoot ? path.join(resolvedRepoPath, contentRoot) : resolvedRepoPath,
+    ...services,
+    attackDataPath,
   };
 }
 
@@ -431,6 +566,18 @@ function repoResponseFields(repoConfig: RuleRepoConfig) {
     contentRoot: repoConfig.contentRoot || '.',
     contentRootPath: repoConfig.contentRootPath,
     configPath: repoConfig.configPath,
+    githubRemote: repoConfig.githubRemote,
+    githubBaseBranch: repoConfig.githubBaseBranch,
+    githubAuthAvailable: Boolean(process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_PAT),
+    attackDataPath: repoConfig.attackDataPathInput,
+    resolvedAttackDataPath: repoConfig.attackDataPath,
+    attackDataMaxDatasets: repoConfig.attackDataMaxDatasets,
+    splunkHecUrl: repoConfig.splunkHecUrl,
+    splunkApiUrl: repoConfig.splunkApiUrl,
+    splunkIndex: repoConfig.splunkIndex,
+    splunkVerifyTls: repoConfig.splunkVerifyTls,
+    splunkHecTokenAvailable: Boolean(process.env.SPLUNK_HEC_TOKEN),
+    splunkApiTokenAvailable: Boolean(process.env.SPLUNK_API_TOKEN || process.env.SPLUNK_TOKEN),
   };
 }
 
@@ -441,6 +588,34 @@ function firstString(...values: unknown[]): string {
     }
   }
   return '';
+}
+
+function optionalString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+  return fallback;
 }
 
 function normalizeContentRoot(value: string): string {

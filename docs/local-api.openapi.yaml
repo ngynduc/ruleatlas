@@ -1,0 +1,182 @@
+openapi: 3.1.0
+info:
+  title: RuleAtlas local operations API
+  version: 1.0.0
+  description: >-
+    Local-only Vite development-server API consumed by the same RuleAtlas frontend.
+    Changes are additive within v1; breaking changes require a new versioned path.
+servers:
+  - url: http://localhost:5173
+paths:
+  /api/rule-repo/git/status:
+    get:
+      summary: Read configured repository status
+      responses:
+        '200':
+          description: Repository status, including a maximum of 250 changed files.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStatus'
+  /api/rule-repo/git/fetch:
+    post:
+      summary: Fetch and prune the configured remote
+      responses:
+        '200':
+          description: Updated repository status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStatus'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/rule-repo/git/pull:
+    post:
+      summary: Fast-forward pull the current clean branch
+      responses:
+        '200':
+          description: Updated repository status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStatus'
+        '409':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/rule-repo/git/branches:
+    post:
+      summary: Create and switch to a feature branch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch]
+              properties:
+                branch: { type: string, maxLength: 160 }
+      responses:
+        '201':
+          description: Branch created; returns updated status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryStatus'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/rule-repo/git/pull-requests:
+    post:
+      summary: Commit, push, and create or reuse a GitHub pull request
+      description: Idempotent for an existing open head/base pull request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch, baseBranch, commitMessage, title]
+              properties:
+                branch: { type: string, maxLength: 160 }
+                baseBranch: { type: string, maxLength: 160 }
+                commitMessage: { type: string, maxLength: 240 }
+                title: { type: string, maxLength: 240 }
+                body: { type: string }
+      responses:
+        '201': { description: Pull request created. }
+        '200': { description: Existing open pull request reused. }
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/rule-tests/datasets:
+    get:
+      summary: List selectable datasets from the configured attack-data repository
+      responses:
+        '200': { description: Dataset catalog with the configured per-test limit. }
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/rule-tests/preview:
+    post:
+      summary: Preview attack-data selection without pulling or ingesting files
+      requestBody:
+        $ref: '#/components/requestBodies/RuleTest'
+      responses:
+        '200': { description: Ranked, capped attack-data manifests and files. }
+        '422':
+          $ref: '#/components/responses/Error'
+  /api/rule-tests/runs:
+    post:
+      summary: Pull matched attack-data, ingest it into Splunk, and execute the rule query
+      requestBody:
+        $ref: '#/components/requestBodies/RuleTest'
+      responses:
+        '201': { description: Completed test run; pass or fail is represented by the passed field. }
+        '412':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
+components:
+  requestBodies:
+    RuleTest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [rule]
+            properties:
+              rule:
+                type: object
+                required: [data]
+                properties:
+                  id: { type: string }
+                  data: { type: object, additionalProperties: true }
+              selectedDatasetPaths:
+                type: array
+                description: Explicit attack-data paths. An empty array invokes rule mapping as a fallback.
+                items: { type: string }
+  responses:
+    Error:
+      description: Structured API error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+    RepositoryStatus:
+      type: object
+      required: [repositoryPath, isGitRepository, branch, clean, changedFiles]
+      properties:
+        repositoryPath: { type: string }
+        isGitRepository: { type: boolean }
+        branch: { type: string }
+        head: { type: string }
+        clean: { type: boolean }
+        ahead: { type: integer }
+        behind: { type: integer }
+        changedFiles:
+          type: array
+          maxItems: 250
+          items:
+            type: object
+            required: [path, indexStatus, worktreeStatus]
+            properties:
+              path: { type: string }
+              indexStatus: { type: string }
+              worktreeStatus: { type: string }
