@@ -103,11 +103,15 @@ describe('Splunk rule test engine', () => {
       expect(result.testIndex).toBe('attack_data');
       expect(result.earliestTime).toBe('-5m');
       expect(result.latestTime).toBe('now');
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(requests[0].authorization).toBe('Splunk hec-test-token');
       expect(requests[1].authorization).toBe('Splunk api-test-token');
       expect(new URLSearchParams(requests[1].body).get('earliest_time')).toBe('-5m');
       expect(new URLSearchParams(requests[1].body).get('latest_time')).toBe('now');
+      expect(new URLSearchParams(requests[2].body).get('search')).toBe(
+        'search index="attack_data" host="ruleatlas-test-run" | delete',
+      );
+      expect(result.cleanupSucceeded).toBe(true);
       expect(progress.map((event) => event.type)).toEqual([
         'ingest_started',
         'ingest_accepted',

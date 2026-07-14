@@ -33,6 +33,7 @@ export interface RuleTestRunResult {
   latestTime: string;
   resultCount: number;
   searchAttempts: number;
+  cleanupSucceeded?: boolean;
   pulledAttackData: boolean;
   selectionMode?: AttackDataDiscovery['selectionMode'];
   selectedManifests: AttackDataDiscovery['matches'];
@@ -150,11 +151,27 @@ export async function executeSplunkRuleTest(
     totalAttempts,
     onProgress: options.onProgress,
   });
-  const completedAt = new Date();
   const warnings = mode === 'attack_data' ? [...(options.discovery?.warnings ?? [])] : [];
   if (mode === 'attack_data' && !preparedQuery.scoped) {
     warnings.push('Query starts with a generating command, so RuleAtlas could not override the test index or add the per-run host filter. The search is limited to the recent test window.');
   }
+  let cleanupSucceeded: boolean | undefined;
+  if (mode === 'attack_data' && ingestedFiles.length > 0) {
+    try {
+      await runSplunkSearch(
+        config,
+        credentials.apiToken,
+        `search index="${escapeSplunkString(config.splunkIndex)}" host="${escapeSplunkString(runId)}" | delete`,
+        attackDataEarliestTime,
+        defaultLatestTime,
+      );
+      cleanupSucceeded = true;
+    } catch (error) {
+      cleanupSucceeded = false;
+      warnings.push(`Replay data cleanup failed: ${error instanceof Error ? error.message : 'unknown Splunk error'}`);
+    }
+  }
+  const completedAt = new Date();
 
   return {
     runId,
@@ -174,6 +191,7 @@ export async function executeSplunkRuleTest(
     latestTime,
     resultCount: search.resultCount,
     searchAttempts: search.attempts,
+    ...(cleanupSucceeded === undefined ? {} : { cleanupSucceeded }),
     pulledAttackData: mode === 'attack_data' && Boolean(options.pulledAttackData),
     ...(mode === 'attack_data' && options.discovery
       ? { selectionMode: options.discovery.selectionMode }

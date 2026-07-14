@@ -8,6 +8,40 @@ info:
 servers:
   - url: http://localhost:5173
 paths:
+  /api/rule-repo/store:
+    get:
+      summary: Build the UI store from repository YAML documents
+      responses:
+        '200': { description: Aggregated repository records. }
+        '404': { description: The repository contains no managed records. }
+    put:
+      summary: Persist records as canonical per-file YAML
+      description: >-
+        Migrates UUID-only rule identities, updates config/id-sequences.yml, removes the legacy
+        ruleatlas-store.json file, and returns the normalized store written to disk.
+      responses:
+        '200': { description: Saved YAML paths and the normalized store. }
+  /api/rule-repo/rule-ids:
+    post:
+      summary: Atomically reserve the next readable rule ID for a category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category: { type: string }
+      responses:
+        '201':
+          description: Reserved rule ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string, pattern: '^[A-Z][A-Z0-9]*-[0-9]{4,}$' }
   /api/rule-repo/git/status:
     get:
       summary: Read configured repository status

@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
-import { open, readFile, readdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { copyFile, mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { parse as parseYaml } from 'yaml';
@@ -21,6 +24,7 @@ export interface AttackDatasetFile {
   source: string;
   sourcetype: string;
   localPath: string;
+  sha256?: string;
 }
 
 export interface AttackDataMatch {
@@ -53,6 +57,7 @@ export interface AttackDataCatalogEntry extends Record<string, unknown> {
   path: string;
   source: string;
   sourcetype: string;
+  sha256?: string;
 }
 
 export interface AttackDataCatalog {
@@ -178,6 +183,7 @@ export async function listAttackData(
           path: dataset.path,
           source: dataset.source,
           sourcetype: dataset.sourcetype,
+          ...(dataset.sha256 ? { sha256: dataset.sha256 } : {}),
         });
       }
     }
@@ -204,11 +210,15 @@ export async function pullAttackDataFiles(
   }
 
   const pathsToPull: string[] = [];
+  const cachedFiles = new Map<string, AttackDatasetFile>();
   for (const file of files) {
     if (!isWithin(attackDataRepo, file.localPath)) {
       throw new ApiError(422, 'invalid_dataset_path', `Dataset path escapes the attack-data repository: ${file.path}`);
     }
-    if (!await isMaterializedFile(file.localPath)) {
+    const cached = await verifiedCachedDataset(file);
+    if (cached) {
+      cachedFiles.set(file.path, cached);
+    } else if (!await isMaterializedFile(file.localPath)) {
       pathsToPull.push(relativeGitPath(attackDataRepo, file.localPath));
     }
   }
@@ -233,14 +243,21 @@ export async function pullAttackDataFiles(
     onProgress?.({ type: 'fetched', paths: pathsToPull, totalFiles: files.length });
   }
 
+  const materializedFiles: AttackDatasetFile[] = [];
   for (const file of files) {
+    const cached = cachedFiles.get(file.path);
+    if (cached) {
+      materializedFiles.push(cached);
+      continue;
+    }
     if (!await isMaterializedFile(file.localPath)) {
       throw new ApiError(422, 'dataset_unavailable', `Attack-data file is unavailable after pull: ${file.path}`);
     }
+    materializedFiles.push(await cacheDataset(file));
   }
 
   onProgress?.({ type: 'ready', fetchedFiles: pathsToPull.length, totalFiles: files.length });
-  return { pulled: pathsToPull.length > 0, files };
+  return { pulled: pathsToPull.length > 0, files: materializedFiles };
 }
 
 export function normalizeMitreTechniques(value: unknown): string[] {
@@ -420,6 +437,7 @@ function extractDatasets(attackDataRepo: string, parsed: Record<string, unknown>
         source: stringValue(value.source) || 'attack_data',
         sourcetype: stringValue(value.sourcetype) || '_json',
         localPath: resolveDatasetPath(attackDataRepo, datasetPath),
+        ...(normalizeSha256(value.sha256) ? { sha256: normalizeSha256(value.sha256) } : {}),
       } satisfies AttackDatasetFile];
     });
   }
@@ -439,6 +457,91 @@ function extractDatasets(attackDataRepo: string, parsed: Record<string, unknown>
       localPath: resolveDatasetPath(attackDataRepo, datasetPath),
     } satisfies AttackDatasetFile];
   });
+}
+
+async function verifiedCachedDataset(file: AttackDatasetFile): Promise<AttackDatasetFile | null> {
+  if (!file.sha256) {
+    return null;
+  }
+  const cachePath = datasetCachePath(file.sha256);
+  if (!await isMaterializedFile(cachePath)) {
+    return null;
+  }
+  if (await sha256File(cachePath) !== file.sha256) {
+    return null;
+  }
+  return { ...file, localPath: cachePath };
+}
+
+async function cacheDataset(file: AttackDatasetFile): Promise<AttackDatasetFile> {
+  const sha256 = await sha256File(file.localPath);
+  if (file.sha256 && file.sha256 !== sha256) {
+    throw new ApiError(
+      422,
+      'dataset_checksum_mismatch',
+      `Dataset checksum does not match its manifest: ${file.path}`,
+      { actual: sha256, expected: file.sha256, path: file.path },
+    );
+  }
+
+  const cachePath = datasetCachePath(sha256);
+  await mkdir(path.dirname(cachePath), { recursive: true });
+  if (!await isMaterializedFile(cachePath)) {
+    const temporaryPath = `${cachePath}.${process.pid}.tmp`;
+    await copyFile(file.localPath, temporaryPath);
+    await rename(temporaryPath, cachePath);
+  }
+  await updateDatasetCacheMetadata(file, sha256);
+  return { ...file, localPath: cachePath, sha256 };
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function updateDatasetCacheMetadata(file: AttackDatasetFile, sha256: string): Promise<void> {
+  const metadataPath = path.join(datasetCacheRoot(), 'metadata', 'datasets.json');
+  let metadata: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(await readFile(metadataPath, 'utf-8')) as unknown;
+    if (isObject(parsed)) metadata = parsed;
+  } catch {
+    // A missing or invalid local cache index is rebuilt from verified files.
+  }
+  metadata[file.path] = {
+    name: file.name,
+    path: file.path,
+    sha256,
+    source: file.source,
+    sourcetype: file.sourcetype,
+    verified_at: new Date().toISOString(),
+  };
+  await mkdir(path.dirname(metadataPath), { recursive: true });
+  const temporaryPath = `${metadataPath}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  await rename(temporaryPath, metadataPath);
+}
+
+function datasetCachePath(sha256: string): string {
+  return path.join(datasetCacheRoot(), 'sha256', sha256.slice(0, 2), sha256);
+}
+
+function datasetCacheRoot(): string {
+  const explicit = process.env.RULEATLAS_DATASET_CACHE?.trim();
+  if (explicit) return path.resolve(explicit);
+  const base = process.env.XDG_CACHE_HOME?.trim() || path.join(os.homedir(), '.cache');
+  return path.join(base, 'ruleatlas', 'datasets');
+}
+
+function normalizeSha256(value: unknown): string {
+  const checksum = stringValue(value).toLowerCase();
+  return /^[0-9a-f]{64}$/.test(checksum) ? checksum : '';
 }
 
 async function repairDatasetPaths(

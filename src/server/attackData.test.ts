@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   discoverAttackData,
   listAttackData,
@@ -13,8 +14,15 @@ import type { AttackDataPullProgress } from './attackData';
 
 const temporaryDirectories: string[] = [];
 
+beforeEach(async () => {
+  const cache = await mkdtemp(path.join(tmpdir(), 'ruleatlas-dataset-cache-'));
+  temporaryDirectories.push(cache);
+  process.env.RULEATLAS_DATASET_CACHE = cache;
+});
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
+  delete process.env.RULEATLAS_DATASET_CACHE;
 });
 
 describe('attack-data discovery', () => {
@@ -99,12 +107,46 @@ datasets:
       '/datasets/attack_techniques/T1003/snapattack/snapattack.log',
     );
     expect(discovery.warnings).toContainEqual(expect.stringContaining('Corrected missing dataset path'));
-    expect(materialized.files[0].localPath).toBe(path.join(datasetDirectory, 'snapattack.log'));
+    expect(materialized.files[0].localPath).toContain(path.join('sha256'));
+    expect(await readFile(materialized.files[0].localPath, 'utf-8')).toBe('event data\n');
     expect(materialized.pulled).toBe(false);
     expect(progress).toEqual([
       { type: 'checking', totalFiles: 1 },
       { type: 'ready', fetchedFiles: 0, totalFiles: 1 },
     ]);
+  });
+
+  it('reuses a verified content-addressed cache and rejects checksum mismatches', async () => {
+    const repository = await mkdtemp(path.join(tmpdir(), 'ruleatlas-attack-data-'));
+    const cache = await mkdtemp(path.join(tmpdir(), 'ruleatlas-dataset-cache-'));
+    temporaryDirectories.push(repository, cache);
+    process.env.RULEATLAS_DATASET_CACHE = cache;
+    const directory = path.join(repository, 'datasets', 'attack_techniques', 'T1059.001', 'test');
+    await mkdir(directory, { recursive: true });
+    const body = 'verified event\n';
+    const checksum = createHash('sha256').update(body).digest('hex');
+    await writeFile(path.join(directory, 'events.log'), body);
+    await writeFile(path.join(directory, 'manifest.yml'), `
+mitre_technique: [T1059.001]
+datasets:
+  - name: events
+    path: /datasets/attack_techniques/T1059.001/test/events.log
+    sha256: ${checksum}
+`);
+    const discovery = await discoverAttackData(repository, { data: { mitre_technique: 'T1059.001' } }, 1);
+    const first = await pullAttackDataFiles(repository, discovery.matches);
+    await writeFile(path.join(directory, 'events.log'), 'changed source\n');
+    const second = await pullAttackDataFiles(repository, discovery.matches);
+
+    expect(second.files[0].localPath).toBe(first.files[0].localPath);
+    expect(await readFile(second.files[0].localPath, 'utf-8')).toBe(body);
+    expect(second.files[0].sha256).toBe(checksum);
+
+    const bad = structuredClone(discovery.matches);
+    bad[0].datasets[0].sha256 = '0'.repeat(64);
+    await expect(pullAttackDataFiles(repository, bad)).rejects.toMatchObject({
+      code: 'dataset_checksum_mismatch',
+    });
   });
 });
 

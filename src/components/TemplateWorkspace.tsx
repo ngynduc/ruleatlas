@@ -17,7 +17,7 @@ import {
 } from '@astryxdesign/core';
 import {
   createBlankRecord,
-  createRuleId,
+  createRuleUuid,
   filterOptions,
   filterRecords,
   importTemplateRecords,
@@ -25,6 +25,7 @@ import {
   updateStoreRecords,
   validateRecord,
 } from '../lib/records';
+import { reserveRuleId } from '../lib/storage';
 import type {
   JsonPreview,
   TemplateDefinition,
@@ -100,20 +101,32 @@ export function TemplateWorkspace({
     setEditing(true);
   };
 
-  const saveDraft = () => {
+  const saveDraft = async () => {
     const nextErrors = validateRecord(template, draft);
+    if (template.id === 'rules' && !draft.data.rule_id) {
+      delete nextErrors.rule_id;
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       return;
     }
 
-    const saved = {
-      ...draft,
-      updatedAt: new Date().toISOString(),
-    };
-    const exists = records.some((record) => record.id === saved.id);
+    const existingDraftId = draft.id;
+    let saved = { ...draft, data: { ...draft.data }, updatedAt: new Date().toISOString() };
+    if (template.id === 'rules' && !saved.data.rule_id) {
+      try {
+        const ruleId = await reserveRuleId(String(saved.data.category || 'general'));
+        saved = { ...saved, id: ruleId, data: { ...saved.data, rule_id: ruleId } };
+      } catch (error) {
+        setErrors({
+          rule_id: error instanceof Error ? error.message : 'Unable to reserve a rule ID.',
+        });
+        return;
+      }
+    }
+    const exists = records.some((record) => record.id === existingDraftId);
     const nextRecords = exists
-      ? records.map((record) => (record.id === saved.id ? saved : record))
+      ? records.map((record) => (record.id === existingDraftId ? saved : record))
       : [saved, ...records];
 
     replaceRecords(nextRecords);
@@ -123,13 +136,14 @@ export function TemplateWorkspace({
   };
 
   const duplicateRecord = (record: TemplateRecord) => {
-    const nextRuleId = template.id === 'rules' ? createRuleId() : undefined;
+    const nextRuleUuid = template.id === 'rules' ? createRuleUuid() : undefined;
     const duplicated = {
       ...record,
-      id: nextRuleId ?? `${record.id}-copy-${Date.now()}`,
+      id: nextRuleUuid ?? `${record.id}-copy-${Date.now()}`,
       data: {
         ...record.data,
-        rule_id: nextRuleId ?? record.data.rule_id,
+        rule_id: nextRuleUuid ? '' : record.data.rule_id,
+        uuid: nextRuleUuid ?? record.data.uuid,
         name: `${recordLabel(record)} Copy`,
       },
       archived: false,
@@ -137,7 +151,6 @@ export function TemplateWorkspace({
       updatedAt: new Date().toISOString(),
     };
 
-    replaceRecords([duplicated, ...records]);
     startEdit(duplicated);
   };
 

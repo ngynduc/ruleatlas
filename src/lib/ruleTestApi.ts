@@ -11,6 +11,7 @@ export interface AttackDatasetFile {
   source: string;
   sourcetype: string;
   localPath: string;
+  sha256?: string;
 }
 
 export interface AttackDataMatch extends Record<string, unknown> {
@@ -43,6 +44,7 @@ export interface AttackDataCatalogEntry extends Record<string, unknown> {
   path: string;
   source: string;
   sourcetype: string;
+  sha256?: string;
 }
 
 export interface AttackDataCatalog {
@@ -70,6 +72,7 @@ export interface RuleTestRunResult {
   latestTime: string;
   resultCount: number;
   searchAttempts: number;
+  cleanupSucceeded?: boolean;
   pulledAttackData: boolean;
   selectionMode?: 'explicit' | 'mapping';
   selectedManifests: AttackDataMatch[];

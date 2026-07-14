@@ -13,14 +13,18 @@ export const severities = ['critical', 'high', 'medium', 'low', 'informational']
 export const confidenceLevels = ['high', 'medium', 'low'] as const;
 export const domains = ['endpoint', 'identity', 'cloud', 'network', 'email', 'saas', 'other'] as const;
 export const categories = [
-  'credential access',
   'execution',
-  'lateral movement',
   'persistence',
-  'exfiltration',
+  'privilege escalation',
   'defense evasion',
+  'credential access',
   'discovery',
+  'lateral movement',
+  'collection',
+  'command and control',
+  'exfiltration',
   'impact',
+  'general',
 ] as const;
 export const coverageTypes = ['detective', 'preventive', 'investigative', 'response', 'gap'] as const;
 export const ownerTypes = ['team', 'person', 'vendor', 'service'] as const;
@@ -53,11 +57,11 @@ const rules: TemplateDefinition = {
     'mitre_tactic',
     'mitre_technique',
     'tags',
-    'last_reviewed',
   ],
   filterFields: ['status', 'severity', 'category', 'coverage_type'],
   fields: [
-    { key: 'rule_id', label: 'Rule ID', type: 'text', required: true, placeholder: 'RA-001' },
+    { key: 'rule_id', label: 'Rule ID', type: 'text', required: true, placeholder: 'EXEC-0001' },
+    { key: 'uuid', label: 'UUID', type: 'text', required: true },
     { key: 'name', label: 'Rule Name', type: 'text', required: true },
     { key: 'description', label: 'Description', type: 'textarea' },
     { key: 'owner', label: 'Owner', type: 'text', required: true },
@@ -73,7 +77,6 @@ const rules: TemplateDefinition = {
     { key: 'mitre_tactic', label: 'MITRE Tactic', type: 'text' },
     { key: 'mitre_technique', label: 'MITRE Technique', type: 'text' },
     { key: 'query', label: 'Current Query', type: 'code' },
-    { key: 'last_reviewed', label: 'Last Reviewed', type: 'date', placeholder: '2026-07-09' },
     { key: 'tags', label: 'Tags', type: 'tags' },
   ],
 };

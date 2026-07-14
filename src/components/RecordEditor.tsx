@@ -206,10 +206,12 @@ function renderControl(
     );
   }
 
-  if (field.key === 'rule_id') {
+  if (field.key === 'rule_id' || field.key === 'uuid') {
     return (
       <TextInput
-        disabledMessage="Rule IDs are generated when the record is created."
+        disabledMessage={field.key === 'rule_id'
+          ? 'Rule IDs are reserved from the repository sequence when the record is saved.'
+          : 'UUIDs are generated when the record is created.'}
         isDisabled
         isRequired={field.required}
         label={field.label}

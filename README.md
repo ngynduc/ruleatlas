@@ -41,6 +41,21 @@ Edit `ruleatlas.config.json`:
 
 `path` is the local location of the rules repo checkout. Relative paths resolve from this project root.
 
+Rule YAML is the repository source of truth. New rules use a readable category ID plus a stable UUID:
+
+```yaml
+id: EXEC-0001
+uuid: 08cf5128-3e17-44ce-9087-f27105609360
+name: Suspicious PowerShell Download
+created_at: 2026-07-08T10:00:00Z
+updated_at: 2026-07-14T12:30:00Z
+```
+
+Rules are written as `contents/rules/<category>/<ID>-<name>.yml`. Sequence counters live in
+`config/id-sequences.yml`. RuleAtlas no longer writes `ruleatlas-store.json`; the legacy file is
+removed on the next successful repository save. Existing JSON records and UUID-only rule IDs are
+read as migration inputs and rewritten to canonical YAML.
+
 Environment variables can override the file:
 
 ```bash
@@ -98,9 +113,11 @@ When an attack-data test runs, RuleAtlas:
 
 1. Uses the explicitly selected datasets, or falls back to MITRE/tag/log-source mapping when the selection is empty.
 2. Pulls only the selected Git LFS files and shows the exact selective fetch target and outcome.
-3. Sends those files to Splunk HEC with a unique run host and records each HEC response.
-4. Overrides the base search index with the configured test index and runs the scoped query through the Splunk search export API.
-5. Stores the live fetch/ingest/search activity, pass/fail result, and selected manifests on the Rule testing page.
+3. Verifies each declared SHA-256 and stores the source file in the content-addressed local dataset cache.
+4. Sends the verified cached files to Splunk HEC with a unique run host and records each HEC response.
+5. Overrides the base search index with the configured test index and runs the scoped query through the Splunk search export API.
+6. Deletes only the events tagged with that run host after the search and reports cleanup failure as a warning.
+7. Stores the live fetch/ingest/search activity, pass/fail result, and selected manifests on the Rule testing page.
 
 The replay status treats HEC acceptance and detection matches as separate checkpoints. A successful HEC response confirms that Splunk accepted the collector request; the following search attempts show whether the replayed events became searchable and matched the rule.
 

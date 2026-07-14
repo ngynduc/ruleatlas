@@ -50,7 +50,7 @@ export function emptyStore(): TemplateStore {
   }, {});
 }
 
-export function createRuleId(): string {
+export function createRuleUuid(): string {
   return createUuid();
 }
 
@@ -60,9 +60,10 @@ export function createBlankRecord(template: TemplateDefinition): TemplateRecord 
     recordData[field.key] = defaultValue(field);
     return recordData;
   }, {});
+  const uuid = template.id === 'rules' ? String(data.uuid || createRuleUuid()) : '';
 
   return {
-    id: `${template.id}-${Date.now()}`,
+    id: uuid || `${template.id}-${Date.now()}`,
     data,
     archived: false,
     createdAt: now,
@@ -72,7 +73,10 @@ export function createBlankRecord(template: TemplateDefinition): TemplateRecord 
 
 function defaultValue(field: TemplateField): RecordValue {
   if (field.key === 'rule_id') {
-    return createRuleId();
+    return '';
+  }
+  if (field.key === 'uuid') {
+    return createRuleUuid();
   }
   if (field.type === 'boolean') {
     return false;
@@ -98,19 +102,21 @@ export function coerceRecord(input: unknown, template: TemplateDefinition): Temp
     recordData[field.key] = coerceValue(rawData[field.key], field);
     return recordData;
   }, {});
-  if (template.id === 'rules' && !isUuid(data.rule_id)) {
-    data.rule_id = createRuleId();
+  if (template.id === 'rules') {
+    const legacyUuid = isUuid(data.rule_id) ? String(data.rule_id) : '';
+    data.uuid = isUuid(data.uuid) ? data.uuid : legacyUuid || createRuleUuid();
+    data.rule_id = isRuleId(data.rule_id) ? data.rule_id : '';
   }
   const recordId = template.id === 'rules'
-    ? String(data.rule_id)
+    ? String(data.rule_id || data.uuid)
     : stringOr(input.id, stringOr(rawData.id, fallback.id));
 
   return {
     id: recordId,
     data,
     archived: typeof input.archived === 'boolean' ? input.archived : false,
-    createdAt: stringOr(input.createdAt, fallback.createdAt),
-    updatedAt: stringOr(input.updatedAt, fallback.updatedAt),
+    createdAt: stringOr(input.createdAt, stringOr(input.created_at, fallback.createdAt)),
+    updatedAt: stringOr(input.updatedAt, stringOr(input.updated_at, fallback.updatedAt)),
   };
 }
 
@@ -252,11 +258,14 @@ function ruleDataFromObject(source: Record<string, unknown>): Record<string, unk
   const owner = stringValue(source.owner) || stringValue(source.author) || stringValue(source['eai:acl.owner']);
   const platform = stringValue(source.platform) || (hasAnySplunkField(source) ? 'Splunk' : '');
   const query = queryText(source);
-  const ruleId = stringValue(source.rule_id) || createRuleId();
+  const sourceId = stringValue(source.id);
+  const ruleId = stringValue(source.rule_id) || (isRuleId(sourceId) ? sourceId : '');
+  const uuid = stringValue(source.uuid) || (isUuid(sourceId) ? sourceId : createRuleUuid());
 
   return {
     ...source,
     rule_id: ruleId,
+    uuid,
     name: stringValue(source.name) || title,
     description: stringValue(source.description),
     owner,
@@ -553,4 +562,8 @@ function isUuid(value: unknown): boolean {
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
+}
+
+function isRuleId(value: unknown): boolean {
+  return /^[A-Z][A-Z0-9]*-\d{4,}$/.test(stringValue(value));
 }

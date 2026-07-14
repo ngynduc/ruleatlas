@@ -102,7 +102,7 @@ export function App() {
     saveStore(store);
     if (firstRepoSave.current) {
       firstRepoSave.current = false;
-      if (!repoStoreFound.current && !storeHasRecords(store)) {
+      if (repoStoreFound.current || !storeHasRecords(store)) {
         return;
       }
     }
@@ -122,6 +122,9 @@ export function App() {
           savedFiles: result.savedFiles,
           targetRepo: result.targetRepo,
         });
+        if (JSON.stringify(result.store) !== JSON.stringify(store)) {
+          setStore(result.store);
+        }
       })
       .catch((error: unknown) => {
         if (saveVersion.current !== currentSave) {

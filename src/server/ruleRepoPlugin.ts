@@ -1,28 +1,18 @@
 import { Buffer } from 'node:buffer';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleGitRepositoryApi, validateGitBranchName, validateGitRemoteName } from './gitRepo';
 import { handleRuleTestApi } from './ruleTestApi';
 import { assertLocalApiRequest, sendApiError } from './http';
-
-interface StoredRecord {
-  id?: unknown;
-  archived?: unknown;
-  createdAt?: unknown;
-  updatedAt?: unknown;
-  data?: Record<string, unknown>;
-}
-
-type StorePayload = Record<string, StoredRecord[]>;
-
-interface StoreFile {
-  exportedAt: string;
-  version: number;
-  templates: StorePayload;
-}
+import {
+  readRepositoryStore,
+  repositoryStorePath,
+  reserveRuleId,
+  writeRepositoryStore,
+} from './repositoryStore';
 
 interface RuleAtlasConfigFile {
   ruleRepo?: {
@@ -77,19 +67,6 @@ const defaultGitHubRemote = 'origin';
 const defaultGitHubBaseBranch = 'main';
 const defaultSplunkIndex = 'attack_data';
 const localConfigFileName = 'ruleatlas.config.json';
-const storeFileName = 'ruleatlas-store.json';
-const templateFolders: Record<string, string> = {
-  dataSources: 'data-sources',
-  detectionObjectives: 'detection-objectives',
-  inventory: 'inventory',
-  mitreMappings: 'mitre-mappings',
-  owners: 'owners',
-  rules: 'rules',
-};
-const legacyRuleFolders: Record<string, string> = {
-  'existing-rules': 'rules',
-  'new-rules': 'rules',
-};
 
 export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
   return {
@@ -141,6 +118,21 @@ export function ruleRepoPlugin(options: RuleRepoPluginOptions = {}): Plugin {
           sendJson(response, 405, { error: 'Method not allowed' });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown repo storage error';
+          sendJson(response, 500, { error: message });
+        }
+      });
+
+      server.middlewares.use('/api/rule-repo/rule-ids', async (request, response) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: 'Method not allowed' });
+            return;
+          }
+          const payload = await readJson(request);
+          const id = await reserveRuleId(repoConfig, isObject(payload) ? payload.category : undefined);
+          sendJson(response, 201, { id });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown rule ID reservation error';
           sendJson(response, 500, { error: message });
         }
       });
@@ -222,212 +214,26 @@ async function handleConfigPut(
 }
 
 async function handleGet(response: ServerResponse, repoConfig: RuleRepoConfig) {
-  const storePath = path.join(repoConfig.repoPath, storeFileName);
-  const fileStore = await readRuleFiles(repoConfig);
-
-  try {
-    const raw = await readFile(storePath, 'utf-8');
-    const store = mergeStores(normalizeStore(JSON.parse(raw)), fileStore);
-    sendJson(response, 200, {
-      store: {
-        exportedAt: new Date().toISOString(),
-        version: 1,
-        templates: store,
-      },
-      storePath,
-      ...repoResponseFields(repoConfig),
-    });
-  } catch {
-    if (storeHasRecords(fileStore)) {
-      sendJson(response, 200, {
-        store: {
-          exportedAt: new Date().toISOString(),
-          version: 1,
-          templates: fileStore,
-        },
-        storePath,
-        ...repoResponseFields(repoConfig),
-      });
-      return;
-    }
-
-    sendJson(response, 404, {
-      store: null,
-      storePath,
-      ...repoResponseFields(repoConfig),
-    });
-  }
-}
-
-async function handlePut(request: IncomingMessage, response: ServerResponse, repoConfig: RuleRepoConfig) {
-  const store = await readJson(request);
-  const savedFiles = await writeStore(repoConfig, store);
-
-  sendJson(response, 200, {
-    savedFiles,
-    storePath: path.join(repoConfig.repoPath, storeFileName),
+  const store = await readRepositoryStore(repoConfig);
+  const storePath = repositoryStorePath(repoConfig);
+  const hasRecords = Object.values(store).some((records) => records.length > 0);
+  sendJson(response, hasRecords ? 200 : 404, {
+    store: hasRecords ? { exportedAt: new Date().toISOString(), version: 2, templates: store } : null,
+    storePath,
     ...repoResponseFields(repoConfig),
   });
 }
 
-async function readRuleFiles(repoConfig: RuleRepoConfig): Promise<StorePayload> {
-  const contentRootPath = repoConfig.contentRootPath;
-  const folderToStoreKey = Object.fromEntries(
-    Object.entries(templateFolders).map(([storeKey, folder]) => [folder, storeKey]),
-  );
-  const output: StorePayload = {};
+async function handlePut(request: IncomingMessage, response: ServerResponse, repoConfig: RuleRepoConfig) {
+  const store = await readJson(request);
+  const result = await writeRepositoryStore(repoConfig, store);
 
-  try {
-    const folders = await readdir(contentRootPath, { withFileTypes: true });
-    for (const folderEntry of folders) {
-      if (!folderEntry.isDirectory()) {
-        continue;
-      }
-
-      const storeKey =
-        legacyRuleFolders[folderEntry.name] ?? folderToStoreKey[folderEntry.name] ?? folderEntry.name;
-      const folderPath = path.join(contentRootPath, folderEntry.name);
-      const files = await readdir(folderPath, { withFileTypes: true });
-      output[storeKey] = output[storeKey] ?? [];
-
-      for (const fileEntry of files) {
-        if (!fileEntry.isFile() || !fileEntry.name.endsWith('.json')) {
-          continue;
-        }
-
-        const filePath = path.join(folderPath, fileEntry.name);
-        const raw = await readFile(filePath, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (isObject(parsed)) {
-          output[storeKey].push(recordFromRuleFile(parsed));
-        }
-      }
-    }
-  } catch {
-    return output;
-  }
-
-  return output;
-}
-
-function recordFromRuleFile(input: Record<string, unknown>): StoredRecord {
-  const data = isObject(input.rule)
-    ? input.rule
-    : isObject(input.data)
-      ? input.data
-      : input;
-
-  return {
-    id: stringValue(input.id) || stringValue(data.rule_id) || stringValue(data.name),
-    archived: input.archived === true,
-    createdAt: stringValue(input.createdAt) || new Date().toISOString(),
-    updatedAt: stringValue(input.updatedAt) || new Date().toISOString(),
-    data,
-  };
-}
-
-function mergeStores(primary: StorePayload, fallback: StorePayload): StorePayload {
-  const output: StorePayload = { ...fallback, ...primary };
-
-  for (const [storeKey, fallbackRecords] of Object.entries(fallback)) {
-    const primaryRecords = primary[storeKey] ?? [];
-    const recordsById = new Map<string, StoredRecord>();
-
-    for (const record of fallbackRecords) {
-      recordsById.set(recordKey(record), record);
-    }
-    for (const record of primaryRecords) {
-      recordsById.set(recordKey(record), record);
-    }
-
-    output[storeKey] = [...recordsById.values()];
-  }
-
-  return output;
-}
-
-function storeHasRecords(store: StorePayload): boolean {
-  return Object.values(store).some((records) => records.length > 0);
-}
-
-async function writeStore(repoConfig: RuleRepoConfig, store: unknown): Promise<string[]> {
-  const storeFile: StoreFile = {
-    exportedAt: new Date().toISOString(),
-    version: 1,
-    templates: normalizeStore(store),
-  };
-
-  await mkdir(repoConfig.repoPath, { recursive: true });
-
-  const savedFiles: string[] = [];
-  const storePath = path.join(repoConfig.repoPath, storeFileName);
-  await writeJson(storePath, storeFile);
-  savedFiles.push(storePath);
-
-  for (const [storeKey, records] of Object.entries(storeFile.templates)) {
-    const folder = templateFolders[storeKey] ?? slugify(storeKey);
-    const targetFolder = path.join(repoConfig.contentRootPath, folder);
-    await mkdir(targetFolder, { recursive: true });
-    await removeJsonFiles(targetFolder);
-
-    for (const record of records) {
-      if (record.archived === true) {
-        continue;
-      }
-
-      const fileName = `${recordSlug(record)}.json`;
-      const filePath = path.join(targetFolder, fileName);
-      await writeJson(filePath, {
-        id: stringValue(record.id),
-        archived: record.archived === true,
-        createdAt: stringValue(record.createdAt),
-        updatedAt: stringValue(record.updatedAt),
-        rule: record.data ?? {},
-      });
-      savedFiles.push(filePath);
-    }
-  }
-
-  return savedFiles;
-}
-
-async function removeJsonFiles(targetFolder: string) {
-  const files = await readdir(targetFolder, { withFileTypes: true });
-  await Promise.all(
-    files
-      .filter((file) => file.isFile() && file.name.endsWith('.json'))
-      .map((file) => unlink(path.join(targetFolder, file.name))),
-  );
-}
-
-function normalizeStore(store: unknown): StorePayload {
-  if (!isObject(store)) {
-    return {};
-  }
-
-  const source = isObject(store.templates) ? store.templates : store;
-  const output = Object.entries(source).reduce<StorePayload>((normalized, [key, value]) => {
-    const normalizedKey = key === 'newRules' || key === 'existingRules' ? 'rules' : key;
-    normalized[normalizedKey] = [
-      ...(normalized[normalizedKey] ?? []),
-      ...(Array.isArray(value) ? value.filter(isObject) : []),
-    ];
-    return normalized;
-  }, {});
-
-  if (output.rules) {
-    output.rules = dedupeRecords(output.rules);
-  }
-
-  return output;
-}
-
-function dedupeRecords(records: StoredRecord[]): StoredRecord[] {
-  const recordsByKey = new Map<string, StoredRecord>();
-  for (const record of records) {
-    recordsByKey.set(recordKey(record), record);
-  }
-  return [...recordsByKey.values()];
+  sendJson(response, 200, {
+    savedFiles: result.savedFiles,
+    store: { exportedAt: new Date().toISOString(), version: 2, templates: result.store },
+    storePath: repositoryStorePath(repoConfig),
+    ...repoResponseFields(repoConfig),
+  });
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -633,38 +439,6 @@ function normalizeContentRoot(value: string): string {
   }
 
   return normalized;
-}
-
-function recordSlug(record: StoredRecord): string {
-  const data = record.data ?? {};
-  const name =
-    stringValue(data.rule_id) ||
-    stringValue(data.name) ||
-    stringValue(data.title) ||
-    stringValue(record.id) ||
-    'rule';
-
-  return slugify(name);
-}
-
-function recordKey(record: StoredRecord): string {
-  return (
-    stringValue(record.id) ||
-    stringValue(record.data?.rule_id) ||
-    stringValue(record.data?.name) ||
-    JSON.stringify(record)
-  );
-}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/https?:\/\//g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 96);
-
-  return slug || 'rule';
 }
 
 function stringValue(value: unknown): string {

@@ -38,6 +38,7 @@ export interface RepoStoreLoadResult {
 
 export interface RepoStoreSaveResult {
   savedFiles: string[];
+  store: TemplateStore;
   storePath: string;
   targetRepo: string;
   contentRoot: string;
@@ -132,5 +133,26 @@ export async function saveRepoStore(store: TemplateStore): Promise<RepoStoreSave
     throw new Error(payload?.error ?? `Repo store save failed with HTTP ${response.status}`);
   }
 
-  return (await response.json()) as RepoStoreSaveResult;
+  const payload = (await response.json()) as Omit<RepoStoreSaveResult, 'store'> & { store: unknown };
+  return { ...payload, store: importStorePayload(payload.store) };
+}
+
+export async function reserveRuleId(category: string): Promise<string> {
+  const response = await fetch('/api/rule-repo/rule-ids', {
+    body: JSON.stringify({ category }),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? `Rule ID reservation failed with HTTP ${response.status}`);
+  }
+  const payload = (await response.json()) as { id?: unknown };
+  if (typeof payload.id !== 'string' || !payload.id) {
+    throw new Error('Rule ID reservation returned an invalid ID.');
+  }
+  return payload.id;
 }
